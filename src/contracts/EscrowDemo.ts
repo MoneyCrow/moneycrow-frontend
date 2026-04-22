@@ -10,8 +10,8 @@
 // ── Addresses ─────────────────────────────────────────────────────────────────
 
 export const DEMO_ADDRESS: Record<number, `0x${string}`> = {
-  8453: '0x0000000000000000000000000000000000000000', // TODO: Base mainnet
-  137:  '0x0000000000000000000000000000000000000000', // TODO: Polygon mainnet
+  8453: '0x04a58Bdb40A7bcC04A92FddF382F3D9e441C337e', // Base mainnet
+  137:  '0xf245A3a3ddB375eFe336bD40Fa0b6d8e06598F12', // Polygon mainnet
 };
 
 /**
