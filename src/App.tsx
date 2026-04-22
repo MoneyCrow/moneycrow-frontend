@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useAccount } from 'wagmi';
+import { useAccount, useReadContract } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import DepositForm    from './pages/DepositForm';
 import EscrowStatus   from './pages/EscrowStatus';
@@ -8,7 +8,7 @@ import ClaimPage      from './pages/ClaimPage';
 import HowItWorks     from './pages/HowItWorks';
 import Faq            from './pages/Faq';
 import Footer         from './components/Footer';
-import { SUPPORTED_CHAIN_IDS } from './contracts/Escrow';
+import { ESCROW_ABI, getEscrowAddress, SUPPORTED_CHAIN_IDS } from './contracts/Escrow';
 
 export type Page = 'deposit' | 'status' | 'admin' | 'claim' | 'how-it-works' | 'faq';
 
@@ -79,7 +79,6 @@ const NAV_ITEMS: { page: Page; label: string }[] = [
   { page: 'claim',        label: 'claim' },
   { page: 'how-it-works', label: 'how it works' },
   { page: 'faq',          label: 'faq' },
-  { page: 'admin',        label: 'admin' },
 ];
 
 /** Read a single URL search param safely (works on first render). */
@@ -104,6 +103,18 @@ export default function App() {
 
   // Pre-fill the claim page depositor when arriving via a deep-link.
   const [claimDepositor, setClaimDepositor] = useState(() => urlParam('depositor'));
+
+  // Admin tab visibility — read admin() from the contract, same check as AdminDashboard.
+  const { address, chain } = useAccount();
+  const escrowAddr = getEscrowAddress(chain?.id);
+  const { data: adminAddress } = useReadContract({
+    address: escrowAddr,
+    abi:     ESCROW_ABI,
+    functionName: 'admin',
+    query: { enabled: !!escrowAddr },
+  });
+  const isAdmin = !!(address && adminAddress &&
+    address.toLowerCase() === (adminAddress as string).toLowerCase());
 
   const goToClaim = (depositor: string) => {
     setClaimDepositor(depositor);
@@ -135,6 +146,14 @@ export default function App() {
             {label}
           </button>
         ))}
+        {isAdmin && (
+          <button
+            className={page === 'admin' ? 'active' : ''}
+            onClick={() => setPage('admin')}
+          >
+            admin
+          </button>
+        )}
       </nav>
 
       <main>

@@ -112,7 +112,68 @@ export default function DepositForm() {
     : 'loading...';
 
   if (!isConnected) {
-    return <Card><div className="not-connected">connect wallet to create a deposit</div></Card>;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {/* ── Hero ─────────────────────────────────────────────────────────── */}
+        <Card>
+          <CardBody>
+            <p style={{
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 11,
+              color: 'var(--muted)',
+              marginBottom: 10,
+              letterSpacing: '0.05em',
+            }}>
+              // what is this?
+            </p>
+            <h2 style={{
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 18,
+              fontWeight: 700,
+              color: 'var(--text)',
+              marginBottom: 12,
+              lineHeight: 1.35,
+            }}>
+              Trustless escrow.<br />No middleman. No custody.
+            </h2>
+            <p style={{
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 12,
+              color: 'var(--muted)',
+              lineHeight: 1.7,
+              marginBottom: 20,
+              maxWidth: 520,
+            }}>
+              MoneyCrow holds funds in a smart contract — not a bank, not a company.
+              Money moves only when both parties agree.
+              Open source and verifiable on-chain.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {([
+                { icon: '⬡', color: 'var(--cyan)',   label: 'Non-custodial',  detail: 'we never hold your funds' },
+                { icon: '⬡', color: 'var(--green)',  label: 'Open source',    detail: 'audit the code yourself' },
+                { icon: '⬡', color: 'var(--orange)', label: 'On-chain',       detail: 'every transaction is publicly verifiable' },
+              ] as const).map(({ icon, color, label, detail }) => (
+                <div key={label} style={{
+                  display: 'flex', alignItems: 'baseline', gap: 8,
+                  fontFamily: 'JetBrains Mono, monospace', fontSize: 12,
+                }}>
+                  <span style={{ color, fontSize: 10, flexShrink: 0 }}>{icon}</span>
+                  <span style={{ color: 'var(--text)', fontWeight: 600 }}>{label}</span>
+                  <span style={{ color: 'var(--muted)' }}>— {detail}</span>
+                </div>
+              ))}
+            </div>
+          </CardBody>
+        </Card>
+
+        {/* ── Connect prompt ────────────────────────────────────────────────── */}
+        <Card>
+          <div className="not-connected">connect wallet to create a deposit</div>
+        </Card>
+      </div>
+    );
   }
   if (!escrowAddr) {
     return <Card><div className="not-connected">// unsupported network — switch to Base or Polygon mainnet</div></Card>;
