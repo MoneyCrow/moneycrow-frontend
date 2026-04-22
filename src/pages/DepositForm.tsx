@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useWriteContract, useAccount, useWaitForTransactionReceipt, useReadContract } from 'wagmi';
-import { parseEther, parseUnits } from 'viem';
+import { parseEther, parseUnits, keccak256, encodePacked } from 'viem';
 import { ESCROW_ABI, getEscrowAddress } from '../contracts/Escrow';
 import { SharpButton } from '../components/sharp/SharpButton';
 import { SharpCard } from '../components/sharp/SharpCard';
@@ -123,18 +123,45 @@ export default function DepositForm() {
     writeApprove({ address: tokenAddr as `0x${string}`, abi: ERC20_ABI, functionName: 'approve', args: [escrowAddr, parsedAmount] });
   };
 
-  const handleDeposit = (e: React.FormEvent) => {
+  const handleDeposit = async (e: React.FormEvent) => {
     e.preventDefault();
     setContactError('');
-    if (!escrowAddr) return;
+    if (!escrowAddr || !address) return;
     if (!terms.trim()) {
       setContactError('terms: required — describe what must happen before funds are released');
       return;
     }
+
+    // Register metadata with backend and get termsHash
+    const apiBase = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001';
+    let termsHash: `0x${string}`;
+    try {
+      const res = await fetch(`${apiBase}/escrow/register`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          depositorAddress:  address,
+          chainId:           chain?.id,
+          depositorEmail,
+          depositorTelegram,
+          recipientEmail,
+          recipientTelegram,
+          description,
+          terms,
+        }),
+      });
+      const data = await res.json() as { ok: boolean; termsHash?: string };
+      if (!data.ok || !data.termsHash) throw new Error('Register failed');
+      termsHash = data.termsHash as `0x${string}`;
+    } catch {
+      // Fallback: compute locally if backend is unreachable
+      termsHash = keccak256(encodePacked(['string', 'string'], [description, terms]));
+    }
+
     if (mode === 'eth') {
-      writeDeposit({ address: escrowAddr, abi: ESCROW_ABI, functionName: 'depositETH', args: [recipient as `0x${string}`, description, recipientEmail, recipientTelegram, depositorEmail, depositorTelegram, terms, 0n], value: parsedAmount });
+      writeDeposit({ address: escrowAddr, abi: ESCROW_ABI, functionName: 'depositETH', args: [recipient as `0x${string}`, termsHash, 0n], value: parsedAmount });
     } else {
-      writeDeposit({ address: escrowAddr, abi: ESCROW_ABI, functionName: 'depositERC20', args: [tokenAddr as `0x${string}`, parsedAmount, recipient as `0x${string}`, description, recipientEmail, recipientTelegram, depositorEmail, depositorTelegram, terms, 0n] });
+      writeDeposit({ address: escrowAddr, abi: ESCROW_ABI, functionName: 'depositERC20', args: [tokenAddr as `0x${string}`, parsedAmount, recipient as `0x${string}`, termsHash, 0n] });
     }
   };
 

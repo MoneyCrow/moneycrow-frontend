@@ -19,11 +19,11 @@ const ERC20_META_ABI = [
 
 const DEMO_TYPES = {
   DemoAcceptance: [
-    { name: 'depositor',   type: 'address' },
-    { name: 'recipient',   type: 'address' },
-    { name: 'amount',      type: 'uint256' },
-    { name: 'token',       type: 'address' },
-    { name: 'description', type: 'string'  },
+    { name: 'depositor',  type: 'address' },
+    { name: 'recipient',  type: 'address' },
+    { name: 'amount',     type: 'uint256' },
+    { name: 'token',      type: 'address' },
+    { name: 'termsHash',  type: 'bytes32' },
   ],
 } as const;
 
@@ -42,6 +42,9 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
   const [depositorInput, setDepositorInput] = useState(initialDepositor);
   const [queryAddr, setQueryAddr]           = useState(initialDepositor);
   const [sig, setSig]                       = useState<`0x${string}` | null>(null);
+  const [demoDescription, setDemoDescription] = useState('');
+
+  const isValidAddr = (a: string) => a.length === 42 && a.startsWith('0x');
 
   useEffect(() => {
     if (initialDepositor) {
@@ -50,7 +53,16 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
     }
   }, [initialDepositor]);
 
-  const isValidAddr = (a: string) => a.length === 42 && a.startsWith('0x');
+  useEffect(() => {
+    if (!isValidAddr(queryAddr) || !chain?.id) return;
+    const apiBase = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001';
+    fetch(`${apiBase}/demo/meta?chainId=${chain.id}&depositor=${queryAddr}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((data: { ok?: boolean; description?: string } | null) => {
+        setDemoDescription(data?.ok && data.description ? data.description : '');
+      })
+      .catch(() => setDemoDescription(''));
+  }, [queryAddr, chain?.id]);
 
   const { data: demo, isLoading } = useReadContract({
     address: demoAddr!, abi: DEMO_ABI, functionName: 'getDemoEscrow',
@@ -86,11 +98,11 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
         types: DEMO_TYPES,
         primaryType: 'DemoAcceptance',
         message: {
-          depositor:   queryAddr as `0x${string}`,
-          recipient:   address,
-          amount:      demo.amount,
-          token:       demo.token as `0x${string}`,
-          description: demo.description,
+          depositor:  queryAddr as `0x${string}`,
+          recipient:  address,
+          amount:     demo.amount,
+          token:      demo.token as `0x${string}`,
+          termsHash:  demo.termsHash as `0x${string}`,
         },
       },
       { onSuccess: (s) => setSig(s) },
@@ -192,7 +204,7 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
               {([
                 ['Status',      statusLabel],
                 ['Amount',      `${formatAmt(demo.amount)} (simulated)`],
-                ['Description', `"${demo.description}"`],
+                ['Description', demoDescription ? `"${demoDescription}"` : '—'],
                 ['Depositor',   demo.depositor],
                 ['Recipient',   demo.recipient],
               ] as [string, string][]).map(([label, value]) => (

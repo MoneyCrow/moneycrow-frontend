@@ -41,19 +41,20 @@ function fmtDeadline(ts: bigint): string {
 
 const ACCEPTANCE_TYPES = {
   EscrowAcceptance: [
-    { name: 'depositor', type: 'address' },
-    { name: 'recipient', type: 'address' },
-    { name: 'amount',    type: 'uint256' },
-    { name: 'token',     type: 'address' },
-    { name: 'terms',     type: 'string'  },
+    { name: 'depositor',  type: 'address' },
+    { name: 'recipient',  type: 'address' },
+    { name: 'amount',     type: 'uint256' },
+    { name: 'token',      type: 'address' },
+    { name: 'termsHash',  type: 'bytes32' },
   ],
 } as const;
 
 function AcceptEscrowPanel({
-  depositor, escrow, chainId, escrowAddr,
+  depositor, escrow, chainId, escrowAddr, terms,
 }: {
   depositor: string;
-  escrow: { recipient: `0x${string}`; amount: bigint; token: `0x${string}`; terms: string; acceptDeadline: bigint };
+  escrow: { recipient: `0x${string}`; amount: bigint; token: `0x${string}`; termsHash: `0x${string}`; acceptDeadline: bigint };
+  terms?: string;
   chainId: number;
   escrowAddr: `0x${string}`;
 }) {
@@ -83,11 +84,11 @@ function AcceptEscrowPanel({
       types: ACCEPTANCE_TYPES,
       primaryType: 'EscrowAcceptance',
       message: {
-        depositor: depositor as `0x${string}`,
-        recipient: escrow.recipient,
-        amount: escrow.amount,
-        token: escrow.token,
-        terms: escrow.terms,
+        depositor:  depositor as `0x${string}`,
+        recipient:  escrow.recipient,
+        amount:     escrow.amount,
+        token:      escrow.token,
+        termsHash:  escrow.termsHash,
       },
     });
   };
@@ -113,9 +114,9 @@ function AcceptEscrowPanel({
         Sign the escrow terms with your wallet to accept. This transitions the escrow from Pending → Active and lets the admin approve release.
       </p>
 
-      {escrow.terms && (
+      {terms && (
         <div style={{ marginBottom: 16, padding: '12px 16px', background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)', border: `1px solid ${border}`, fontSize: 13, color: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(17,17,17,0.65)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.6 }}>
-          <span style={{ color: '#F2B705', fontWeight: 600 }}>Terms: </span>{escrow.terms}
+          <span style={{ color: '#F2B705', fontWeight: 600 }}>Terms: </span>{terms}
         </div>
       )}
 
@@ -162,6 +163,7 @@ export default function EscrowStatus({ onGoToClaim }: Props) {
 
   const [input, setInput] = useState(urlDepositor);
   const [query, setQuery] = useState(urlDepositor);
+  const [escrowMetaData, setEscrowMetaData] = useState<{ description?: string; terms?: string } | null>(null);
 
   const isValidAddr = (a: string) => a.length === 42 && a.startsWith('0x');
 
@@ -185,6 +187,18 @@ export default function EscrowStatus({ onGoToClaim }: Props) {
     chainId: selectedChainId,
     query: { enabled: isValidAddr(query) && !!escrowAddr && !!escrow && escrow.status === 1 },
   });
+
+  useEffect(() => {
+    if (!query || !selectedChainId) return;
+    const apiBase = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001';
+    fetch(`${apiBase}/escrow/meta?chainId=${selectedChainId}&depositor=${query}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((data: { ok?: boolean; description?: string; terms?: string } | null) => {
+        if (data?.ok) setEscrowMetaData({ description: data.description, terms: data.terms });
+        else setEscrowMetaData(null);
+      })
+      .catch(() => setEscrowMetaData(null));
+  }, [query, selectedChainId]);
 
   const isERC20 = escrow && escrow.token !== ETH_ZERO;
 
@@ -290,12 +304,12 @@ export default function EscrowStatus({ onGoToClaim }: Props) {
                 ['Recipient',   <code key="r">{escrow.recipient}</code>],
                 ['Amount',      formatAmt(escrow.amount)],
                 ['Fee',         `${escrow.feeBps} bps (${Number(escrow.feeBps) / 100}%)`],
-                ['Description', `"${escrow.description}"`],
+                ['Description', escrowMetaData?.description ? `"${escrowMetaData.description}"` : <span style={{ color: textTertiary }}>—</span>],
                 ['Time Left',   timeLeft !== undefined
                   ? (timeLeft > 0n ? `${(Number(timeLeft) / 3600).toFixed(1)}h remaining` : 'Timed out — claimTimeout() available')
                   : '–'],
                 ['Accept Deadline', fmtDeadline(escrow.acceptDeadline)],
-                ['Terms',       escrow.terms || '(contract default)'],
+                ['Terms',       escrowMetaData?.terms || <span style={{ color: textTertiary }}>—</span>],
               ] as [string, React.ReactNode][]).map(([label, value]) => (
                 <div key={label} style={rowStyle}>
                   <div style={labelStyle}>{label}</div>
@@ -303,23 +317,6 @@ export default function EscrowStatus({ onGoToClaim }: Props) {
                 </div>
               ))}
 
-              {/* Contact rows */}
-              <div style={{ ...rowStyle, background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)' }}>
-                <div style={{ padding: '8px 14px', fontSize: 11, fontWeight: 700, color: textTertiary, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Contact Info</div>
-              </div>
-              {([
-                ['Recipient Email',    escrow.recipientEmail],
-                ['Recipient Telegram', escrow.recipientTelegram],
-                ['Depositor Email',    escrow.depositorEmail],
-                ['Depositor Telegram', escrow.depositorTelegram],
-              ] as [string, string][]).map(([label, value]) => (
-                <div key={label} style={rowStyle}>
-                  <div style={labelStyle}>{label}</div>
-                  <div style={valueStyle}>
-                    <span style={{ color: value ? (isDark ? '#34D399' : '#059669') : textTertiary }}>{value || 'Not set'}</span>
-                  </div>
-                </div>
-              ))}
             </div>
 
             {/* Explorer link */}
@@ -342,6 +339,7 @@ export default function EscrowStatus({ onGoToClaim }: Props) {
                 escrow={escrow}
                 chainId={selectedChainId}
                 escrowAddr={escrowAddr}
+                terms={escrowMetaData?.terms}
               />
             )}
 

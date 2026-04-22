@@ -34,12 +34,12 @@ const KNOWN_TOKENS: Record<string, { symbol: string; decimals: number }> = {
 };
 
 const DEPOSITED_EVENT = parseAbiItem(
-  'event Deposited(address indexed depositor, address indexed recipient, address token, uint256 amount, uint16 feeBps, string description, string recipientEmail, string recipientTelegram, string depositorEmail, string depositorTelegram)',
+  'event Deposited(address indexed depositor, address indexed recipient, address token, uint256 amount, uint16 feeBps)',
 );
 
 interface EscrowRow {
   depositor: `0x${string}`; recipient: `0x${string}`; token: `0x${string}`;
-  amount: bigint; status: number; feeBps: number; description: string;
+  amount: bigint; status: number; feeBps: number;
   createdAt: bigint; acceptDeadline: bigint;
 }
 
@@ -133,9 +133,7 @@ function EscrowListPanel({ escrowAddr, chainId, onSelectDepositor }: {
       type GetEscrowResult = {
         depositor: `0x${string}`; recipient: `0x${string}`; token: `0x${string}`;
         amount: bigint; createdAt: bigint; status: number | bigint; feeBps: number | bigint;
-        description: string; recipientEmail: string; recipientTelegram: string;
-        depositorEmail: string; depositorTelegram: string;
-        terms: string; acceptDeadline: bigint;
+        termsHash: `0x${string}`; acceptDeadline: bigint;
       };
 
       const escrows = await Promise.all(
@@ -151,7 +149,7 @@ function EscrowListPanel({ escrowAddr, chainId, onSelectDepositor }: {
         const token  = e.token !== ETH_ZERO ? e.token : (evtAmt?.token ?? e.token);
         return {
           depositor: dep, recipient: e.recipient, token, amount,
-          status: Number(e.status), feeBps: Number(e.feeBps), description: e.description,
+          status: Number(e.status), feeBps: Number(e.feeBps),
           createdAt: e.createdAt, acceptDeadline: e.acceptDeadline,
         };
       }));
@@ -231,10 +229,7 @@ function EscrowListPanel({ escrowAddr, chainId, onSelectDepositor }: {
                       <td style={{ ...tdStyle, color: '#34D399' }}>{fmtAmt(r)}</td>
                       <td style={tdStyle}><SharpBadge status={STATUS_VARIANT[r.status] ?? 'pending'} /></td>
                       <td style={{ ...tdStyle, color: textTertiary }}>
-                        {r.status === 0
-                          ? fmtDeadline(r.acceptDeadline)
-                          : `"${r.description.slice(0, 28)}${r.description.length > 28 ? '…' : ''}"`
-                        }
+                        {r.status === 0 ? fmtDeadline(r.acceptDeadline) : '—'}
                       </td>
                       <td style={tdStyle}>
                         <button
@@ -263,7 +258,6 @@ function EscrowListPanel({ escrowAddr, chainId, onSelectDepositor }: {
                     <th style={thStyle}>Recipient</th>
                     <th style={thStyle}>Amount</th>
                     <th style={thStyle}>Status</th>
-                    <th style={thStyle}>Description</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -273,9 +267,7 @@ function EscrowListPanel({ escrowAddr, chainId, onSelectDepositor }: {
                       <td style={tdStyle}><code style={{ color: textTertiary }} title={r.recipient}>{trunc(r.recipient)}</code></td>
                       <td style={{ ...tdStyle, color: textSecondary }}>{fmtAmt(r)}</td>
                       <td style={tdStyle}><SharpBadge status={STATUS_VARIANT[r.status] ?? 'refunded'} /></td>
-                      <td style={{ ...tdStyle, color: textTertiary }}>
-                        &quot;{r.description.slice(0, 36)}{r.description.length > 36 ? '…' : ''}&quot;
-                      </td>
+                      <td style={{ ...tdStyle, color: textTertiary }}>—</td>
                     </tr>
                   ))}
                 </tbody>
@@ -354,12 +346,36 @@ function DemoPanel({ address: adminAddr, chain }: { address: `0x${string}`; chai
 
   useEffect(() => { if (createSuccess) { refetchDemo(); } }, [createSuccess, refetchDemo]);
 
-  const handleCreate = () => {
-    if (!canCreate || !demoAddr) return;
+  const handleCreate = async () => {
+    if (!canCreate || !demoAddr || !address) return;
     resetCreate();
+    const apiBase = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001';
+    let termsHash: `0x${string}`;
+    try {
+      const res = await fetch(`${apiBase}/demo/register`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          depositorAddress:  address,
+          chainId:           chain.id,
+          depositorEmail,
+          depositorTelegram,
+          recipientEmail,
+          recipientTelegram,
+          description,
+        }),
+      });
+      const data = await res.json() as { ok: boolean; termsHash?: string };
+      if (!data.ok || !data.termsHash) throw new Error('Register failed');
+      termsHash = data.termsHash as `0x${string}`;
+    } catch {
+      // Fallback: compute locally
+      const { keccak256, encodePacked } = await import('viem');
+      termsHash = keccak256(encodePacked(['string', 'string'], [description, '']));
+    }
     writeCreate({
       address: demoAddr, abi: DEMO_ABI, functionName: 'createDemo',
-      args: [recipient as `0x${string}`, tokenAddress as `0x${string}`, parsedAmount!, description, recipientEmail, recipientTelegram, depositorEmail, depositorTelegram],
+      args: [recipient as `0x${string}`, tokenAddress as `0x${string}`, parsedAmount!, termsHash],
     });
   };
 
@@ -668,13 +684,9 @@ export default function AdminDashboard() {
                     <InfoRow label="Status"><SharpBadge status={STATUS_VARIANT[escrow.status] ?? 'pending'} /></InfoRow>
                     <InfoRow label="Amount">{amountDisplay}</InfoRow>
                     <InfoRow label="Fee">{escrow.feeBps} bps ({Number(escrow.feeBps) / 100}%)</InfoRow>
-                    <InfoRow label="Description">"{escrow.description}"</InfoRow>
+                    <InfoRow label="Terms Hash"><code style={{ fontSize: 11 }}>{escrow.termsHash}</code></InfoRow>
                     <InfoRow label="Recipient"><code>{escrow.recipient}</code></InfoRow>
                     <InfoRow label="Depositor"><code>{escrow.depositor}</code></InfoRow>
-                    <InfoRow label="Rcpt Email"><span style={{ color: escrow.recipientEmail ? (isDark ? '#34D399' : '#059669') : textTertiary }}>{escrow.recipientEmail || 'Not set'}</span></InfoRow>
-                    <InfoRow label="Rcpt Telegram"><span style={{ color: escrow.recipientTelegram ? (isDark ? '#34D399' : '#059669') : textTertiary }}>{escrow.recipientTelegram || 'Not set'}</span></InfoRow>
-                    <InfoRow label="Dep Email"><span style={{ color: escrow.depositorEmail ? (isDark ? '#34D399' : '#059669') : textTertiary }}>{escrow.depositorEmail || 'Not set'}</span></InfoRow>
-                    <InfoRow label="Dep Telegram"><span style={{ color: escrow.depositorTelegram ? (isDark ? '#34D399' : '#059669') : textTertiary }}>{escrow.depositorTelegram || 'Not set'}</span></InfoRow>
                   </tbody>
                 </table>
               </div>
