@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useReadContract, useAccount, useSignTypedData, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { formatEther, formatUnits } from 'viem';
-import { ESCROW_ABI, getEscrowAddress, ESCROW_ADDRESS, STATUS_LABEL, STATUS_VARIANT } from '../contracts/Escrow';
-import { Button }                     from '@/components/ui/button';
-import { Card, CardHeader, CardBody } from '@/components/ui/card';
-import { Input }                      from '@/components/ui/input';
-import { Badge }                      from '@/components/ui/badge';
+import { ESCROW_ABI, getEscrowAddress, ESCROW_ADDRESS, STATUS_VARIANT } from '../contracts/Escrow';
+import { SharpButton } from '../components/sharp/SharpButton';
+import { SharpCard } from '../components/sharp/SharpCard';
+import { SharpInput } from '../components/sharp/SharpInput';
+import { SharpBadge } from '../components/sharp/SharpBadge';
+import { SharpPageHeader } from '../components/sharp/SharpPageHeader';
+import { useTheme } from '../context/ThemeContext';
 
 const ERC20_META_ABI = [
   { name: 'decimals', inputs: [], outputs: [{ type: 'uint8' }],  stateMutability: 'view', type: 'function' },
@@ -15,8 +17,8 @@ const ERC20_META_ABI = [
 const ETH_ZERO = '0x0000000000000000000000000000000000000000';
 
 const CHAIN_OPTIONS = [
-  { id: 8453, name: 'Base',    color: '#7ee8fa' },
-  { id: 137,  name: 'Polygon', color: '#c792ea' },
+  { id: 8453, name: 'Base',    color: '#4F8EFF' },
+  { id: 137,  name: 'Polygon', color: '#A855F7' },
 ] as const;
 
 const EXPLORER: Record<number, string> = {
@@ -25,10 +27,6 @@ const EXPLORER: Record<number, string> = {
 };
 
 type Props = { onGoToClaim?: (depositor: string) => void };
-
-function ContactCell({ value }: { value: string }) {
-  return <span className={value ? 'text-[var(--green)]' : 'text-[var(--muted2)]'}>{value || '// not set'}</span>;
-}
 
 function fmtDeadline(ts: bigint): string {
   const now = BigInt(Math.floor(Date.now() / 1000));
@@ -41,8 +39,6 @@ function fmtDeadline(ts: bigint): string {
   return `${date} (${h}h ${m}m remaining)`;
 }
 
-// ── EIP-712 typed data for EscrowAcceptance ───────────────────────────────────
-
 const ACCEPTANCE_TYPES = {
   EscrowAcceptance: [
     { name: 'depositor', type: 'address' },
@@ -53,136 +49,101 @@ const ACCEPTANCE_TYPES = {
   ],
 } as const;
 
-// ── Accept-escrow sub-panel ───────────────────────────────────────────────────
-
 function AcceptEscrowPanel({
-  depositor,
-  escrow,
-  chainId,
-  escrowAddr,
+  depositor, escrow, chainId, escrowAddr,
 }: {
-  depositor:  string;
-  escrow:     { recipient: `0x${string}`; amount: bigint; token: `0x${string}`; terms: string; acceptDeadline: bigint };
-  chainId:    number;
+  depositor: string;
+  escrow: { recipient: `0x${string}`; amount: bigint; token: `0x${string}`; terms: string; acceptDeadline: bigint };
+  chainId: number;
   escrowAddr: `0x${string}`;
 }) {
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+  const border = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.10)';
+
   const now = BigInt(Math.floor(Date.now() / 1000));
   const deadlinePassed = escrow.acceptDeadline > 0n && escrow.acceptDeadline < now;
 
   const { signTypedData, isPending: signPending, data: signature, error: signError } = useSignTypedData();
-
   const { writeContract, data: acceptHash, isPending: writePending, error: writeError } = useWriteContract();
   const { isLoading: acceptConfirming, isSuccess: acceptDone } = useWaitForTransactionReceipt({ hash: acceptHash });
 
-  // As soon as we have a signature, submit it on-chain automatically.
   useEffect(() => {
     if (signature && !writePending && !acceptHash) {
       writeContract({
-        address:      escrowAddr,
-        abi:          ESCROW_ABI,
-        functionName: 'acceptEscrow',
-        args:         [depositor as `0x${string}`, signature],
+        address: escrowAddr, abi: ESCROW_ABI, functionName: 'acceptEscrow',
+        args: [depositor as `0x${string}`, signature],
       });
     }
-  }, [signature]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [signature]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSign = () => {
     signTypedData({
-      domain: {
-        name:              'MoneyCrow Escrow',
-        version:           '1',
-        chainId,
-        verifyingContract: escrowAddr,
-      },
-      types:   ACCEPTANCE_TYPES,
+      domain: { name: 'MoneyCrow Escrow', version: '1', chainId, verifyingContract: escrowAddr },
+      types: ACCEPTANCE_TYPES,
       primaryType: 'EscrowAcceptance',
       message: {
         depositor: depositor as `0x${string}`,
         recipient: escrow.recipient,
-        amount:    escrow.amount,
-        token:     escrow.token,
-        terms:     escrow.terms,
+        amount: escrow.amount,
+        token: escrow.token,
+        terms: escrow.terms,
       },
     });
   };
 
   if (deadlinePassed) {
-    return (
-      <div className="mt-4 alert alert-error" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
-        ✗ accept deadline has passed — depositor can reclaim via depositorRefund()
-      </div>
-    );
+    return <div className="alert alert-error" style={{ marginTop: 16 }}>Accept deadline has passed — depositor can reclaim via depositorRefund()</div>;
   }
 
   if (acceptDone) {
-    return (
-      <div className="mt-4 alert alert-success" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
-        ✓ escrow accepted — status is now <b>Active</b>. Admin will review and approve release.
-      </div>
-    );
+    return <div className="alert alert-success" style={{ marginTop: 16 }}>Escrow accepted — status is now <b>Active</b>. Admin will review and approve release.</div>;
   }
 
   const busy = signPending || writePending || acceptConfirming;
 
   return (
-    <div className="mt-4 p-4" style={{
-      background: 'rgba(126,232,250,0.05)',
-      border: '1px solid rgba(126,232,250,0.2)',
-      borderRadius: 3,
-      fontFamily: 'JetBrains Mono, monospace',
+    <div style={{
+      marginTop: 16, padding: '20px 24px',
+      background: isDark ? 'rgba(79,142,255,0.05)' : 'rgba(79,142,255,0.04)',
+      border: `1px solid rgba(79,142,255,0.2)`,
     }}>
-      <p className="text-[11px] text-[var(--cyan)] mb-1">// action required — you are the recipient</p>
-      <p className="text-[11px] text-[var(--muted)] mb-4 leading-relaxed">
-        Sign the escrow terms with your wallet to accept. This transitions the escrow from
-        Pending → Active and lets the admin approve release.
+      <p style={{ fontSize: 12, fontWeight: 700, color: '#4F8EFF', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Action required — you are the recipient</p>
+      <p style={{ fontSize: 13, color: isDark ? 'rgba(255,255,255,0.5)' : 'rgba(17,17,17,0.55)', marginBottom: 16, lineHeight: 1.65 }}>
+        Sign the escrow terms with your wallet to accept. This transitions the escrow from Pending → Active and lets the admin approve release.
       </p>
 
       {escrow.terms && (
-        <div className="mb-3 p-3" style={{
-          background: 'var(--surface2)',
-          border: '1px solid var(--border)',
-          borderRadius: 2,
-          fontSize: 11,
-          color: 'var(--muted)',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-        }}>
-          <span style={{ color: 'var(--pink)' }}>terms: </span>
-          {escrow.terms}
+        <div style={{ marginBottom: 16, padding: '12px 16px', background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)', border: `1px solid ${border}`, fontSize: 13, color: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(17,17,17,0.65)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.6 }}>
+          <span style={{ color: '#F2B705', fontWeight: 600 }}>Terms: </span>{escrow.terms}
         </div>
       )}
 
-      <Button
-        variant="success"
-        onClick={handleSign}
-        disabled={busy}
-      >
-        {signPending      ? '> signing...'
-          : writePending  ? '> submitting...'
-          : acceptConfirming ? '> confirming...'
-          : '> sign & accept escrow'}
-      </Button>
+      <SharpButton onClick={handleSign} disabled={busy}>
+        {signPending ? 'Signing...' : writePending ? 'Submitting...' : acceptConfirming ? 'Confirming...' : 'Sign & Accept Escrow'}
+      </SharpButton>
 
       {(signError ?? writeError) && (
-        <div className="alert alert-error mt-3">
-          ✗ {(signError ?? writeError)?.message}
+        <div className="alert alert-error" style={{ marginTop: 12 }}>
+          {(signError ?? writeError)?.message}
         </div>
       )}
     </div>
   );
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
-
 export default function EscrowStatus({ onGoToClaim }: Props) {
   const { address, chain: walletChain } = useAccount();
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+  const border = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.10)';
+  const textSecondary = isDark ? 'rgba(255,255,255,0.45)' : 'rgba(17,17,17,0.5)';
+  const textTertiary = isDark ? 'rgba(255,255,255,0.30)' : 'rgba(17,17,17,0.35)';
 
-  // Default to wallet chain if connected + supported, else Base.
   const [selectedChainId, setSelectedChainId] = useState<number>(
     walletChain?.id && ESCROW_ADDRESS[walletChain.id] ? walletChain.id : 8453
   );
 
-  // Follow wallet chain when it changes.
   useEffect(() => {
     if (walletChain?.id && ESCROW_ADDRESS[walletChain.id]) {
       setSelectedChainId(walletChain.id);
@@ -192,7 +153,6 @@ export default function EscrowStatus({ onGoToClaim }: Props) {
   const escrowAddr = getEscrowAddress(selectedChainId);
   const explorer   = EXPLORER[selectedChainId] ?? 'https://basescan.org';
 
-  // Pre-populate from ?depositor=0x... URL param (used in email notification links)
   const urlDepositor = (() => {
     try {
       const v = new URLSearchParams(window.location.search).get('depositor') ?? '';
@@ -206,47 +166,35 @@ export default function EscrowStatus({ onGoToClaim }: Props) {
   const isValidAddr = (a: string) => a.length === 42 && a.startsWith('0x');
 
   const { data: escrow, isLoading, error } = useReadContract({
-    address:      escrowAddr!,
-    abi:          ESCROW_ABI,
-    functionName: 'getEscrow',
-    args:         [query as `0x${string}`],
-    chainId:      selectedChainId,
-    query:        { enabled: isValidAddr(query) && !!escrowAddr },
+    address: escrowAddr!, abi: ESCROW_ABI, functionName: 'getEscrow',
+    args: [query as `0x${string}`],
+    chainId: selectedChainId,
+    query: { enabled: isValidAddr(query) && !!escrowAddr },
   });
 
   const { data: timeLeft } = useReadContract({
-    address:      escrowAddr!,
-    abi:          ESCROW_ABI,
-    functionName: 'timeRemaining',
-    args:         [query as `0x${string}`],
-    chainId:      selectedChainId,
-    query:        { enabled: isValidAddr(query) && !!escrowAddr },
+    address: escrowAddr!, abi: ESCROW_ABI, functionName: 'timeRemaining',
+    args: [query as `0x${string}`],
+    chainId: selectedChainId,
+    query: { enabled: isValidAddr(query) && !!escrowAddr },
   });
 
   const { data: releaseApproved } = useReadContract({
-    address:      escrowAddr!,
-    abi:          ESCROW_ABI,
-    functionName: 'releaseApproved',
-    args:         [query as `0x${string}`],
-    chainId:      selectedChainId,
-    query:        { enabled: isValidAddr(query) && !!escrowAddr && !!escrow && escrow.status === 1 },
+    address: escrowAddr!, abi: ESCROW_ABI, functionName: 'releaseApproved',
+    args: [query as `0x${string}`],
+    chainId: selectedChainId,
+    query: { enabled: isValidAddr(query) && !!escrowAddr && !!escrow && escrow.status === 1 },
   });
 
   const isERC20 = escrow && escrow.token !== ETH_ZERO;
 
   const { data: tokenDecimals } = useReadContract({
-    address:  escrow?.token as `0x${string}`,
-    abi:      ERC20_META_ABI,
-    functionName: 'decimals',
-    chainId:  selectedChainId,
-    query:    { enabled: !!isERC20 },
+    address: escrow?.token as `0x${string}`, abi: ERC20_META_ABI, functionName: 'decimals',
+    chainId: selectedChainId, query: { enabled: !!isERC20 },
   });
   const { data: tokenSymbol } = useReadContract({
-    address:  escrow?.token as `0x${string}`,
-    abi:      ERC20_META_ABI,
-    functionName: 'symbol',
-    chainId:  selectedChainId,
-    query:    { enabled: !!isERC20 },
+    address: escrow?.token as `0x${string}`, abi: ERC20_META_ABI, functionName: 'symbol',
+    chainId: selectedChainId, query: { enabled: !!isERC20 },
   });
 
   const formatAmt = (raw: bigint) => {
@@ -256,146 +204,138 @@ export default function EscrowStatus({ onGoToClaim }: Props) {
 
   const hasEscrow   = escrow && escrow.amount > 0n;
   const isRecipient = address && escrow && address.toLowerCase() === escrow.recipient.toLowerCase();
-
-  // Claim button: status Active (1) AND admin has flagged releaseApproved
-  const canGoClaim = hasEscrow && escrow.status === 1 && releaseApproved === true && isRecipient;
-
-  // Accept panel: status Pending (0) AND connected wallet is recipient
+  const canGoClaim  = hasEscrow && escrow.status === 1 && releaseApproved === true && isRecipient;
   const showAcceptPanel = hasEscrow && escrow.status === 0 && isRecipient;
-
   const chainMeta = CHAIN_OPTIONS.find(c => c.id === selectedChainId)!;
 
+  const rowStyle: React.CSSProperties = { display: 'flex', gap: 0, borderBottom: `1px solid ${border}`, minHeight: 40 };
+  const labelStyle: React.CSSProperties = { width: 160, flexShrink: 0, padding: '10px 14px', fontSize: 12, fontWeight: 600, color: textTertiary, textTransform: 'uppercase', letterSpacing: '0.06em', borderRight: `1px solid ${border}` };
+  const valueStyle: React.CSSProperties = { flex: 1, padding: '10px 14px', fontSize: 13, color: isDark ? '#FFFFFF' : '#111111', wordBreak: 'break-all' };
+
   return (
-    <Card>
-      <CardHeader>
-        <span className="text-[var(--orange)]">getEscrow</span>
-        <span className="text-[var(--muted)]">( depositor ) &mdash; public lookup</span>
-      </CardHeader>
-      <CardBody>
-        {/* ── Network selector — works without wallet ── */}
-        <div className="mb-4">
-          <p className="text-[11px] text-[var(--muted2)] mb-2">// select network</p>
-          <div className="flex w-fit border border-[var(--border2)] rounded-sm overflow-hidden">
-            {CHAIN_OPTIONS.map((chain, i) => (
+    <div>
+      <SharpPageHeader title="My Escrows" subtitle="Look up any escrow by depositor address — no wallet needed." />
+
+      <SharpCard style={{ padding: '28px 32px' }}>
+        {/* Network selector */}
+        <div style={{ marginBottom: 20 }}>
+          <p style={{ fontSize: 11, fontWeight: 700, color: textTertiary, letterSpacing: '0.10em', textTransform: 'uppercase', marginBottom: 10 }}>Network</p>
+          <div style={{ display: 'flex', width: 'fit-content', border: `1px solid ${border}`, overflow: 'hidden' }}>
+            {CHAIN_OPTIONS.map((chain) => (
               <button
                 key={chain.id}
                 type="button"
                 onClick={() => { setSelectedChainId(chain.id); setQuery(''); }}
-                className={[
-                  'px-5 py-1.5 text-xs font-semibold font-mono cursor-pointer transition-all border-none',
-                  i > 0 ? 'border-l border-[var(--border2)]' : '',
-                ].join(' ')}
                 style={{
+                  padding: '8px 20px', border: 'none', cursor: 'pointer',
+                  fontFamily: "'Space Grotesk', sans-serif", fontSize: 12, fontWeight: 700,
+                  letterSpacing: '0.06em',
                   background: selectedChainId === chain.id ? `${chain.color}18` : 'transparent',
-                  color: selectedChainId === chain.id ? chain.color : 'var(--muted)',
+                  color: selectedChainId === chain.id ? chain.color : textSecondary,
+                  transition: 'all 0.12s',
                 }}
               >
-                <span style={{
-                  display: 'inline-block', width: 6, height: 6,
-                  borderRadius: '50%', background: chain.color,
-                  marginRight: 6, verticalAlign: 'middle',
-                  opacity: selectedChainId === chain.id ? 1 : 0.35,
-                }} />
+                <span style={{ display: 'inline-block', width: 6, height: 6, background: chain.color, marginRight: 6, verticalAlign: 'middle', opacity: selectedChainId === chain.id ? 1 : 0.35 }} />
                 {chain.name}
               </button>
             ))}
           </div>
         </div>
 
-        {/* ── Address input ── */}
-        <div className="flex gap-2 mb-4">
-          <Input
-            placeholder="0x... depositor address — no wallet needed"
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && isValidAddr(input) && setQuery(input)}
-            className="flex-1"
-          />
-          <Button size="sm" onClick={() => setQuery(input)} disabled={!isValidAddr(input)}>
-            query
-          </Button>
+        {/* Address input */}
+        <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+          <div style={{ flex: 1 }}>
+            <SharpInput
+              placeholder="0x... depositor address — no wallet needed"
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && isValidAddr(input) && setQuery(input)}
+            />
+          </div>
+          <SharpButton size="sm" onClick={() => setQuery(input)} disabled={!isValidAddr(input)}>
+            Query
+          </SharpButton>
         </div>
 
-        {isLoading && <p className="text-[var(--muted)] text-xs">// loading from {chainMeta.name}...</p>}
-        {error     && <div className="alert alert-error">✗ {error.message}</div>}
+        {isLoading && <p style={{ fontSize: 13, color: textSecondary }}>Loading from {chainMeta.name}...</p>}
+        {error && <div className="alert alert-error">{error.message}</div>}
 
         {hasEscrow && (
           <>
-            <table className="w-full border-collapse">
-              <tbody>
-                <tr>
-                  <td className="text-[var(--pink)] text-xs w-40 pr-3 py-2 border-b border-[var(--border)]">network</td>
-                  <td className="py-2 border-b border-[var(--border)]">
-                    <span style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 5,
-                      fontSize: 11, fontWeight: 600, color: chainMeta.color,
-                      fontFamily: 'JetBrains Mono, monospace',
-                    }}>
-                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: chainMeta.color }} />
-                      {chainMeta.name}
-                    </span>
-                  </td>
-                </tr>
-                <tr>
-                  <td className="text-[var(--pink)] text-xs w-40 pr-3 py-2 border-b border-[var(--border)]">status</td>
-                  <td className="py-2 border-b border-[var(--border)]">
-                    <Badge variant={STATUS_VARIANT[escrow.status] as 'pending' | 'active' | 'released' | 'refunded' | undefined}>
-                      {STATUS_LABEL[escrow.status] ?? `unknown(${escrow.status})`}
-                    </Badge>
-                    {escrow.status === 1 && releaseApproved && (
-                      <span className="ml-2 text-[10px] text-[var(--orange)]">// release approved</span>
-                    )}
-                  </td>
-                </tr>
-                {([
-                  ['depositor',   <code key="d">{escrow.depositor}</code>],
-                  ['recipient',   <code key="r">{escrow.recipient}</code>],
-                  ['amount',      formatAmt(escrow.amount)],
-                  ['fee_bps',     `${escrow.feeBps} bps (${Number(escrow.feeBps) / 100}%)`],
-                  ['description', `"${escrow.description}"`],
-                  ['time_left',   timeLeft !== undefined
-                    ? (timeLeft > 0n ? `${(Number(timeLeft) / 3600).toFixed(1)}h remaining` : '// timed out — claimTimeout() available')
-                    : '–'],
-                  ['accept_deadline', fmtDeadline(escrow.acceptDeadline)],
-                  ['terms',       escrow.terms || '// (contract default)'],
-                ] as [string, React.ReactNode][]).map(([label, value]) => (
-                  <tr key={label}>
-                    <td className="text-[var(--pink)] text-xs w-40 pr-3 py-2 border-b border-[var(--border)]">{label}</td>
-                    <td className="text-[var(--green)] text-xs py-2 border-b border-[var(--border)] break-all">{value}</td>
-                  </tr>
-                ))}
+            <div style={{ border: `1px solid ${border}`, marginTop: 8 }}>
+              {/* Network row */}
+              <div style={rowStyle}>
+                <div style={labelStyle}>Network</div>
+                <div style={valueStyle}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: chainMeta.color, fontSize: 13, fontWeight: 600 }}>
+                    <span style={{ width: 6, height: 6, background: chainMeta.color }} />
+                    {chainMeta.name}
+                  </span>
+                </div>
+              </div>
 
-                {/* Contact info */}
-                <tr>
-                  <td colSpan={2} className="pt-3 pb-1 text-[11px] text-[var(--muted2)]">// contact info</td>
-                </tr>
-                {([
-                  ['recipient_email',    escrow.recipientEmail],
-                  ['recipient_telegram', escrow.recipientTelegram],
-                  ['depositor_email',    escrow.depositorEmail],
-                  ['depositor_telegram', escrow.depositorTelegram],
-                ] as [string, string][]).map(([label, value]) => (
-                  <tr key={label}>
-                    <td className="text-[var(--pink)] text-xs w-40 pr-3 py-2 border-b border-[var(--border)]">{label}</td>
-                    <td className="text-xs py-2 border-b border-[var(--border)]"><ContactCell value={value} /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+              {/* Status row */}
+              <div style={rowStyle}>
+                <div style={labelStyle}>Status</div>
+                <div style={{ ...valueStyle, display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <SharpBadge status={STATUS_VARIANT[escrow.status] ?? 'pending'} />
+                  {escrow.status === 1 && releaseApproved && (
+                    <span style={{ fontSize: 11, color: '#F2B705', fontWeight: 600 }}>Release approved</span>
+                  )}
+                </div>
+              </div>
+
+              {([
+                ['Depositor',   <code key="d">{escrow.depositor}</code>],
+                ['Recipient',   <code key="r">{escrow.recipient}</code>],
+                ['Amount',      formatAmt(escrow.amount)],
+                ['Fee',         `${escrow.feeBps} bps (${Number(escrow.feeBps) / 100}%)`],
+                ['Description', `"${escrow.description}"`],
+                ['Time Left',   timeLeft !== undefined
+                  ? (timeLeft > 0n ? `${(Number(timeLeft) / 3600).toFixed(1)}h remaining` : 'Timed out — claimTimeout() available')
+                  : '–'],
+                ['Accept Deadline', fmtDeadline(escrow.acceptDeadline)],
+                ['Terms',       escrow.terms || '(contract default)'],
+              ] as [string, React.ReactNode][]).map(([label, value]) => (
+                <div key={label} style={rowStyle}>
+                  <div style={labelStyle}>{label}</div>
+                  <div style={valueStyle}>{value}</div>
+                </div>
+              ))}
+
+              {/* Contact rows */}
+              <div style={{ ...rowStyle, background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)' }}>
+                <div style={{ padding: '8px 14px', fontSize: 11, fontWeight: 700, color: textTertiary, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Contact Info</div>
+              </div>
+              {([
+                ['Recipient Email',    escrow.recipientEmail],
+                ['Recipient Telegram', escrow.recipientTelegram],
+                ['Depositor Email',    escrow.depositorEmail],
+                ['Depositor Telegram', escrow.depositorTelegram],
+              ] as [string, string][]).map(([label, value]) => (
+                <div key={label} style={rowStyle}>
+                  <div style={labelStyle}>{label}</div>
+                  <div style={valueStyle}>
+                    <span style={{ color: value ? (isDark ? '#34D399' : '#059669') : textTertiary }}>{value || 'Not set'}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
 
             {/* Explorer link */}
-            <div className="mt-3">
+            <div style={{ marginTop: 12 }}>
               <a
                 href={`${explorer}/address/${escrowAddr}`}
                 target="_blank" rel="noreferrer"
-                className="text-[var(--muted2)] text-[10px] hover:text-[var(--muted)]"
-                style={{ fontFamily: 'JetBrains Mono, monospace', textDecoration: 'none' }}
+                style={{ fontSize: 12, color: textTertiary, textDecoration: 'none', transition: 'color 0.12s' }}
+                onMouseEnter={e => { e.currentTarget.style.color = textSecondary; }}
+                onMouseLeave={e => { e.currentTarget.style.color = textTertiary; }}
               >
-                // view contract on {chainMeta.name === 'Base' ? 'Basescan' : 'Polygonscan'} ↗
+                View contract on {chainMeta.name === 'Base' ? 'Basescan' : 'Polygonscan'} ↗
               </a>
             </div>
 
-            {/* ── Recipient: accept escrow (EIP-712) ── */}
+            {/* Accept escrow panel */}
             {showAcceptPanel && escrowAddr && (
               <AcceptEscrowPanel
                 depositor={query}
@@ -405,15 +345,18 @@ export default function EscrowStatus({ onGoToClaim }: Props) {
               />
             )}
 
-            {/* ── Recipient: claim approved funds ── */}
+            {/* Claim button */}
             {canGoClaim && (
-              <div className="mt-4">
-                <p className="text-[11px] text-[var(--orange)] mb-2">
-                  // admin has approved release — claim your funds now
+              <div style={{ marginTop: 16 }}>
+                <p style={{ fontSize: 12, color: '#F2B705', fontWeight: 600, marginBottom: 10 }}>
+                  Admin has approved release — claim your funds now
                 </p>
-                <Button variant="success" onClick={() => onGoToClaim?.(escrow.depositor)}>
-                  &gt; go to claim →
-                </Button>
+                <SharpButton
+                  style={{ background: 'rgba(52,211,153,0.15)', color: '#34D399', border: '1px solid rgba(52,211,153,0.3)' }}
+                  onClick={() => onGoToClaim?.(escrow.depositor)}
+                >
+                  Go to Claim →
+                </SharpButton>
               </div>
             )}
 
@@ -422,66 +365,48 @@ export default function EscrowStatus({ onGoToClaim }: Props) {
               escrow.acceptDeadline > 0n &&
               BigInt(Math.floor(Date.now() / 1000)) > escrow.acceptDeadline &&
               address?.toLowerCase() === escrow.depositor.toLowerCase() && (
-              <div className="mt-4">
-                <p className="text-[11px] text-[var(--red)] mb-2">
-                  // accept deadline passed — recipient did not accept. You can reclaim your funds.
+              <div style={{ marginTop: 16 }}>
+                <p style={{ fontSize: 12, color: '#F87171', fontWeight: 600, marginBottom: 10 }}>
+                  Accept deadline passed — recipient did not accept. You can reclaim your funds.
                 </p>
-                <DepositorRefundButton
-                  depositor={query}
-                  escrowAddr={escrowAddr!}
-                />
+                <DepositorRefundButton depositor={query} escrowAddr={escrowAddr!} />
               </div>
             )}
           </>
         )}
 
         {isValidAddr(query) && !isLoading && escrow && escrow.amount === 0n && (
-          <p className="text-[var(--muted)] text-xs">// no escrow found for this address on {chainMeta.name}</p>
+          <p style={{ fontSize: 13, color: textSecondary }}>No escrow found for this address on {chainMeta.name}</p>
         )}
 
-        {/* Public notice */}
         {!query && (
-          <p className="text-[11px] text-[var(--muted2)] mt-2" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
-            // no wallet connection required — any visitor can look up any escrow
+          <p style={{ fontSize: 12, color: textTertiary, marginTop: 8 }}>
+            No wallet connection required — any visitor can look up any escrow
           </p>
         )}
-
-      </CardBody>
-    </Card>
+      </SharpCard>
+    </div>
   );
 }
 
-// ── Depositor refund sub-component ────────────────────────────────────────────
-
-function DepositorRefundButton({
-  depositor,
-  escrowAddr,
-}: {
-  depositor:  string;
-  escrowAddr: `0x${string}`;
-}) {
+function DepositorRefundButton({ depositor, escrowAddr }: { depositor: string; escrowAddr: `0x${string}` }) {
   const { writeContract, data: hash, isPending, error } = useWriteContract();
   const { isLoading: confirming, isSuccess } = useWaitForTransactionReceipt({ hash });
 
   if (isSuccess) {
-    return <div className="alert alert-success">✓ refunded — funds returned to depositor</div>;
+    return <div className="alert alert-success">Refunded — funds returned to depositor</div>;
   }
 
   return (
     <div>
-      <Button
-        variant="danger"
-        onClick={() => writeContract({
-          address: escrowAddr,
-          abi: ESCROW_ABI,
-          functionName: 'depositorRefund',
-          args: [depositor as `0x${string}`],
-        })}
+      <SharpButton
+        style={{ background: 'rgba(248,113,113,0.15)', color: '#F87171', border: '1px solid rgba(248,113,113,0.3)' }}
+        onClick={() => writeContract({ address: escrowAddr, abi: ESCROW_ABI, functionName: 'depositorRefund', args: [depositor as `0x${string}`] })}
         disabled={isPending || confirming}
       >
-        {isPending ? '> awaiting signature...' : confirming ? '> confirming...' : '> depositorRefund()'}
-      </Button>
-      {error && <div className="alert alert-error mt-2">✗ {error.message}</div>}
+        {isPending ? 'Awaiting signature...' : confirming ? 'Confirming...' : 'Depositor Refund'}
+      </SharpButton>
+      {error && <div className="alert alert-error" style={{ marginTop: 8 }}>{error.message}</div>}
     </div>
   );
 }

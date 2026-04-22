@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useAccount, useReadContract } from 'wagmi';
-import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { ThemeProvider } from './context/ThemeContext';
+import { AppShell } from './components/sharp/AppShell';
+import Landing        from './pages/Landing';
 import DepositForm    from './pages/DepositForm';
 import EscrowStatus   from './pages/EscrowStatus';
 import AdminDashboard from './pages/AdminDashboard';
@@ -8,169 +10,75 @@ import ClaimPage      from './pages/ClaimPage';
 import DemoAccept     from './pages/DemoAccept';
 import HowItWorks     from './pages/HowItWorks';
 import Faq            from './pages/Faq';
-import Footer         from './components/Footer';
-import { ESCROW_ABI, getEscrowAddress, SUPPORTED_CHAIN_IDS } from './contracts/Escrow';
+import { ESCROW_ABI, getEscrowAddress } from './contracts/Escrow';
 
-export type Page = 'deposit' | 'status' | 'admin' | 'claim' | 'demo-accept' | 'how-it-works' | 'faq';
+export type Page = 'landing' | 'create' | 'status' | 'claim' | 'demo-accept' | 'admin' | 'how-it-works' | 'faq';
 
-const NETWORK_META: Record<number, { name: string; color: string; dot: string }> = {
-  8453: { name: 'Base',    color: '#7ee8fa', dot: '#7ee8fa' },
-  137:  { name: 'Polygon', color: '#c792ea', dot: '#c792ea' },
-};
+const VALID_TABS: Page[] = ['landing', 'create', 'status', 'claim', 'demo-accept', 'admin', 'how-it-works', 'faq'];
 
-function NetworkBadge() {
-  const { chain, isConnected } = useAccount();
-  if (!isConnected || !chain) return null;
-
-  const meta = NETWORK_META[chain.id];
-  if (!meta) {
-    return (
-      <span style={{
-        fontSize: 11, fontFamily: 'JetBrains Mono, monospace', fontWeight: 600,
-        padding: '3px 10px', borderRadius: 2, letterSpacing: '0.05em',
-        background: 'rgba(240,113,120,0.12)', color: 'var(--red)',
-        border: '1px solid rgba(240,113,120,0.35)',
-      }}>
-        ⚠ unsupported network
-      </span>
-    );
-  }
-
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 6,
-      fontSize: 11, fontFamily: 'JetBrains Mono, monospace', fontWeight: 600,
-      padding: '3px 10px', borderRadius: 2, letterSpacing: '0.05em',
-      background: `${meta.color}18`,
-      color: meta.color,
-      border: `1px solid ${meta.color}50`,
-    }}>
-      <span style={{ width: 6, height: 6, borderRadius: '50%', background: meta.dot, flexShrink: 0 }} />
-      {meta.name}
-    </span>
-  );
-}
-
-function UnsupportedNetworkBanner() {
-  const { chain, isConnected } = useAccount();
-  const isUnsupported = isConnected && chain && !(SUPPORTED_CHAIN_IDS as readonly number[]).includes(chain.id);
-  if (!isUnsupported) return null;
-
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 10,
-      padding: '10px 24px',
-      background: 'rgba(240,113,120,0.07)',
-      borderBottom: '1px solid rgba(240,113,120,0.25)',
-      fontSize: 12, fontFamily: 'JetBrains Mono, monospace',
-      color: 'var(--red)',
-    }}>
-      <span style={{ fontSize: 14 }}>⚠</span>
-      <span>
-        Connected to <strong>{chain!.name}</strong> — please switch to{' '}
-        <strong>Base</strong> or <strong>Polygon</strong> mainnet to use this app.
-      </span>
-    </div>
-  );
-}
-
-const NAV_ITEMS: { page: Page; label: string }[] = [
-  { page: 'deposit',      label: 'deposit' },
-  { page: 'status',       label: 'status' },
-  { page: 'claim',        label: 'claim' },
-  { page: 'how-it-works', label: 'how it works' },
-  { page: 'faq',          label: 'faq' },
-];
-
-/** Read a single URL search param safely (works on first render). */
 function urlParam(key: string): string {
-  try { return new URLSearchParams(window.location.search).get(key) ?? ''; }
-  catch { return ''; }
+  try { return new URLSearchParams(window.location.search).get(key) ?? ''; } catch { return ''; }
 }
 
-const VALID_TABS: Page[] = ['deposit', 'status', 'admin', 'claim', 'demo-accept', 'how-it-works', 'faq'];
+function mapLegacyTab(tab: string): Page {
+  if (tab === 'deposit') return 'create';
+  if (VALID_TABS.includes(tab as Page)) return tab as Page;
+  return 'landing';
+}
 
-export default function App() {
-  console.log('App mounting');
-
-  // Initialise from URL so email deep-links land on the right tab.
-  // e.g. https://moneycrow.xyz/?tab=status&depositor=0xABC…
-  //      https://moneycrow.xyz/?tab=claim&depositor=0xABC…
-  //      https://moneycrow.xyz/?tab=admin
+function AppInner() {
   const [page, setPage] = useState<Page>(() => {
-    const tab = urlParam('tab') as Page;
-    return VALID_TABS.includes(tab) ? tab : 'deposit';
+    try {
+      const saved = JSON.parse(localStorage.getItem('mc_v3_state') || '{}');
+      const urlTab = urlParam('tab');
+      if (urlTab) return mapLegacyTab(urlTab);
+      if (saved.page && VALID_TABS.includes(saved.page)) return saved.page;
+    } catch {}
+    return 'landing';
   });
 
-  // Pre-fill depositor for claim / demo-accept pages when arriving via a deep-link.
-  const [claimDepositor,     setClaimDepositor]     = useState(() => urlParam('depositor'));
-  const [demoAcceptDepositor] = useState(() =>
-    urlParam('tab') === 'demo-accept' ? urlParam('depositor') : '',
-  );
+  const [claimDepositor]      = useState(() => urlParam('depositor'));
+  const [demoAcceptDepositor] = useState(() => urlParam('tab') === 'demo-accept' ? urlParam('depositor') : '');
 
-  // Admin tab visibility — read admin() from the contract, same check as AdminDashboard.
   const { address, chain } = useAccount();
   const escrowAddr = getEscrowAddress(chain?.id);
   const { data: adminAddress } = useReadContract({
-    address: escrowAddr,
-    abi:     ESCROW_ABI,
-    functionName: 'admin',
+    address: escrowAddr, abi: ESCROW_ABI, functionName: 'admin',
     query: { enabled: !!escrowAddr },
   });
-  const isAdmin = !!(address && adminAddress &&
-    address.toLowerCase() === (adminAddress as string).toLowerCase());
+  const isAdmin = !!(address && adminAddress && address.toLowerCase() === (adminAddress as string).toLowerCase());
 
-  const goToClaim = (depositor: string) => {
-    setClaimDepositor(depositor);
-    setPage('claim');
-  };
+  function navigate(p: Page) {
+    setPage(p);
+    try {
+      const saved = JSON.parse(localStorage.getItem('mc_v3_state') || '{}');
+      localStorage.setItem('mc_v3_state', JSON.stringify({ ...saved, page: p }));
+    } catch {}
+  }
+
+  function goToClaim(depositor: string) {
+    navigate('claim');
+    void depositor;
+  }
 
   return (
-    <div className="app">
-      <header>
-        <div className="logo">
-          <div className="logo-icon">M</div>
-          <div className="logo-text">Money<span>Crow</span></div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <NetworkBadge />
-          <ConnectButton />
-        </div>
-      </header>
+    <AppShell page={page} onNav={navigate} isAdmin={isAdmin}>
+      {page === 'landing'      && <Landing onNav={navigate} />}
+      {page === 'create'       && <DepositForm />}
+      {page === 'status'       && <EscrowStatus onGoToClaim={goToClaim} />}
+      {page === 'claim'        && <ClaimPage initialDepositor={claimDepositor} />}
+      {page === 'demo-accept'  && <DemoAccept initialDepositor={demoAcceptDepositor} />}
+      {page === 'how-it-works' && <HowItWorks />}
+      {page === 'faq'          && <Faq />}
+      {page === 'admin'        && <AdminDashboard />}
+    </AppShell>
+  );
+}
 
-      <UnsupportedNetworkBanner />
-
-      <nav>
-        {NAV_ITEMS.map(({ page: p, label }) => (
-          <button
-            key={p}
-            className={page === p ? 'active' : ''}
-            onClick={() => setPage(p)}
-          >
-            {label}
-          </button>
-        ))}
-        {isAdmin && (
-          <button
-            className={page === 'admin' ? 'active' : ''}
-            onClick={() => setPage('admin')}
-          >
-            admin
-          </button>
-        )}
-      </nav>
-
-      <main>
-        {page === 'deposit'      && <DepositForm />}
-        {page === 'status'       && <EscrowStatus onGoToClaim={goToClaim} />}
-        {page === 'claim'        && <ClaimPage initialDepositor={claimDepositor} />}
-        {page === 'demo-accept'  && <DemoAccept initialDepositor={demoAcceptDepositor} />}
-        {page === 'how-it-works' && <HowItWorks />}
-        {page === 'faq'          && <Faq />}
-        {page === 'admin'        && <AdminDashboard />}
-      </main>
-
-      <Footer onNavigate={setPage} />
-    </div>
+export default function App() {
+  return (
+    <ThemeProvider>
+      <AppInner />
+    </ThemeProvider>
   );
 }

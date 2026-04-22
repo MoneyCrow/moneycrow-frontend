@@ -2,10 +2,11 @@ import { useState, useEffect } from 'react';
 import { useWriteContract, useReadContract, useAccount, useWaitForTransactionReceipt } from 'wagmi';
 import { formatEther, formatUnits } from 'viem';
 import { ESCROW_ABI, getEscrowAddress, STATUS_LABEL } from '../contracts/Escrow';
-import { Button }                     from '@/components/ui/button';
-import { Card, CardHeader, CardBody } from '@/components/ui/card';
-import { Input }                      from '@/components/ui/input';
-import { Label }                      from '@/components/ui/label';
+import { SharpButton } from '../components/sharp/SharpButton';
+import { SharpCard } from '../components/sharp/SharpCard';
+import { SharpInput } from '../components/sharp/SharpInput';
+import { SharpPageHeader } from '../components/sharp/SharpPageHeader';
+import { useTheme } from '../context/ThemeContext';
 
 const ERC20_DECIMALS_ABI = [
   { name: 'decimals', inputs: [], outputs: [{ type: 'uint8' }],  stateMutability: 'view', type: 'function' },
@@ -18,6 +19,12 @@ type Props = { initialDepositor?: string };
 
 export default function ClaimPage({ initialDepositor = '' }: Props) {
   const { address, isConnected, chain } = useAccount();
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+  const border = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.10)';
+  const textSecondary = isDark ? 'rgba(255,255,255,0.45)' : 'rgba(17,17,17,0.5)';
+  const textTertiary = isDark ? 'rgba(255,255,255,0.30)' : 'rgba(17,17,17,0.35)';
+
   const escrowAddr = getEscrowAddress(chain?.id);
 
   const [depositorInput, setDepositorInput] = useState(initialDepositor);
@@ -43,7 +50,6 @@ export default function ClaimPage({ initialDepositor = '' }: Props) {
   const { data: tokenDecimals } = useReadContract({ address: escrow?.token as `0x${string}`, abi: ERC20_DECIMALS_ABI, functionName: 'decimals', query: { enabled: !!isERC20 } });
   const { data: tokenSymbol }   = useReadContract({ address: escrow?.token as `0x${string}`, abi: ERC20_DECIMALS_ABI, functionName: 'symbol',   query: { enabled: !!isERC20 } });
 
-  // releaseApproved is now a mapping — read it directly from the contract
   const { data: releaseApproved } = useReadContract({
     address: escrowAddr!, abi: ESCROW_ABI, functionName: 'releaseApproved',
     args: [queryAddr as `0x${string}`],
@@ -53,7 +59,6 @@ export default function ClaimPage({ initialDepositor = '' }: Props) {
   const { writeContract, data: claimHash, isPending, error, reset } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: claimHash });
 
-  // canClaim: status must be Active (1) AND releaseApproved flag is set
   const isActive    = escrow?.status === 1;
   const isRecipient = address && escrow && address.toLowerCase() === escrow.recipient.toLowerCase();
   const canClaim    = isActive && releaseApproved === true && isRecipient;
@@ -76,135 +81,145 @@ export default function ClaimPage({ initialDepositor = '' }: Props) {
     writeContract({ address: escrowAddr!, abi: ESCROW_ABI, functionName: 'claim', args: [queryAddr as `0x${string}`] });
   };
 
+  const rowStyle: React.CSSProperties = { display: 'flex', gap: 0, borderBottom: `1px solid ${border}` };
+  const labelStyle: React.CSSProperties = { width: 140, flexShrink: 0, padding: '10px 14px', fontSize: 12, fontWeight: 600, color: textTertiary, textTransform: 'uppercase', letterSpacing: '0.06em', borderRight: `1px solid ${border}` };
+  const valueStyle: React.CSSProperties = { flex: 1, padding: '10px 14px', fontSize: 13, color: isDark ? '#FFFFFF' : '#111111', wordBreak: 'break-all' };
+
   if (!isConnected) {
-    return <Card><div className="not-connected">connect wallet to claim funds</div></Card>;
+    return (
+      <div>
+        <SharpPageHeader title="Claim Funds" subtitle="Claim your approved escrow funds directly to your wallet." />
+        <SharpCard><div className="not-connected">Connect wallet to claim funds</div></SharpCard>
+      </div>
+    );
   }
   if (!escrowAddr) {
-    return <Card><div className="not-connected">// unsupported network — switch to Base or Polygon mainnet</div></Card>;
+    return (
+      <div>
+        <SharpPageHeader title="Claim Funds" subtitle="Claim your approved escrow funds directly to your wallet." />
+        <SharpCard><div className="not-connected">Unsupported network — switch to Base or Polygon mainnet</div></SharpCard>
+      </div>
+    );
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <span className="text-[var(--orange)]">claim</span>
-        <span className="text-[var(--muted)]">( depositor ) &mdash; recipient only</span>
-      </CardHeader>
-      <CardBody>
+    <div>
+      <SharpPageHeader title="Claim Funds" subtitle="Claim your approved escrow funds directly to your wallet." />
 
+      <SharpCard style={{ padding: '28px 32px' }}>
         {/* Depositor lookup */}
-        <div className="mb-4">
-          <Label htmlFor="depositorAddr">depositor_address</Label>
-          <div className="flex gap-2">
-            <Input
-              id="depositorAddr"
-              placeholder="0x... (paste depositor address from your notification)"
-              value={depositorInput}
-              onChange={e => { setDepositorInput(e.target.value); reset(); }}
-              onKeyDown={e => e.key === 'Enter' && isValidAddr(depositorInput) && setQueryAddr(depositorInput)}
-              className="flex-1"
-            />
-            <Button size="sm" onClick={() => { setQueryAddr(depositorInput); reset(); }}
-              disabled={!isValidAddr(depositorInput)}>
-              query
-            </Button>
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <SharpInput
+                label="Depositor Address"
+                id="depositorAddr"
+                placeholder="0x... (paste depositor address from your notification)"
+                value={depositorInput}
+                onChange={e => { setDepositorInput(e.target.value); reset(); }}
+                onKeyDown={e => e.key === 'Enter' && isValidAddr(depositorInput) && setQueryAddr(depositorInput)}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+              <SharpButton size="sm" onClick={() => { setQueryAddr(depositorInput); reset(); }}
+                disabled={!isValidAddr(depositorInput)}>
+                Query
+              </SharpButton>
+            </div>
           </div>
         </div>
 
-
-        {isLoading && <p className="text-[var(--muted)] text-xs">// loading...</p>}
+        {isLoading && <p style={{ fontSize: 13, color: textSecondary }}>Loading...</p>}
 
         {isValidAddr(queryAddr) && !isLoading && escrow && escrow.amount === 0n && (
-          <p className="text-[var(--muted)] text-xs">// no escrow found for this address</p>
+          <p style={{ fontSize: 13, color: textSecondary }}>No escrow found for this address</p>
         )}
 
         {escrow && escrow.amount > 0n && !canClaim && (
-          <div className="alert alert-error mt-3">
+          <div className="alert alert-error" style={{ marginTop: 12 }}>
             {!isActive
-              ? `✗ escrow status is not Active (current: ${STATUS_LABEL[escrow.status] ?? escrow.status})`
+              ? `Escrow status is not Active (current: ${STATUS_LABEL[escrow.status] ?? escrow.status})`
               : isActive && !releaseApproved
-              ? '✗ admin has not yet approved the release'
-              : `✗ connected wallet is not the recipient — expected ${escrow.recipient}`
+              ? 'Admin has not yet approved the release'
+              : `Connected wallet is not the recipient — expected ${escrow.recipient}`
             }
           </div>
         )}
 
-        {/* ── Claim panel ── */}
+        {/* Claim panel */}
         {canClaim && !isSuccess && (
-          <div className="mt-4">
-            <p className="text-[11px] text-[var(--muted2)] mb-3">
-              // admin approved release — review before claiming
+          <div style={{ marginTop: 16 }}>
+            <p style={{ fontSize: 12, color: textSecondary, marginBottom: 16, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Admin approved release — review before claiming
             </p>
 
-            <table className="w-full border-collapse mb-5">
-              <tbody>
-                {([
-                  ['description',  `"${escrow.description}"`],
-                  ['gross_amount', formatAmt(gross)],
-                  ['fee',          feeText],
-                  ['fee_amount',   feeAmt > 0n ? `− ${formatAmt(feeAmt)}` : 'none'],
-                  ['net_to_you',   formatAmt(net)],
-                  ['depositor',    escrow.depositor],
-                ] as [string, string][]).map(([label, value]) => (
-                  <tr key={label}>
-                    <td className="text-[var(--pink)] text-xs w-32 pr-3 py-2 border-b border-[var(--border)] align-top">{label}</td>
-                    <td className={[
-                      'text-xs py-2 border-b border-[var(--border)] break-all',
-                      label === 'net_to_you'  ? 'text-[var(--green)] font-semibold' :
-                      label === 'fee_amount'  ? 'text-[var(--red)]' :
-                      'text-[var(--green)]',
-                    ].join(' ')}>
-                      {label === 'depositor' ? <code>{value}</code> : value}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div style={{ border: `1px solid ${border}`, marginBottom: 20 }}>
+              {([
+                ['Description',  `"${escrow.description}"`],
+                ['Gross Amount', formatAmt(gross)],
+                ['Fee',          feeText],
+                ['Fee Amount',   feeAmt > 0n ? `− ${formatAmt(feeAmt)}` : 'none'],
+                ['Net to You',   formatAmt(net)],
+                ['Depositor',    escrow.depositor],
+              ] as [string, string][]).map(([label, value]) => (
+                <div key={label} style={{ ...rowStyle, borderBottom: `1px solid ${border}` }}>
+                  <div style={labelStyle}>{label}</div>
+                  <div style={{
+                    ...valueStyle,
+                    color: label === 'Net to You' ? '#34D399' : label === 'Fee Amount' ? '#F87171' : (isDark ? '#FFFFFF' : '#111111'),
+                    fontWeight: label === 'Net to You' ? 700 : 400,
+                  }}>
+                    {label === 'Depositor' ? <code>{value}</code> : value}
+                  </div>
+                </div>
+              ))}
+            </div>
 
-            <Button variant="success" onClick={handleClaim} disabled={isPending || isConfirming}>
-              {isPending ? '> awaiting signature...' : isConfirming ? '> mining...' : '> claim()'}
-            </Button>
-            <p className="mt-3 text-[11px] text-[var(--muted2)] leading-relaxed" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
-              // Your wallet address is cryptographically verified.
-              No other wallet can claim these funds.
+            <SharpButton
+              style={{ background: 'rgba(52,211,153,0.15)', color: '#34D399', border: '1px solid rgba(52,211,153,0.3)' }}
+              onClick={handleClaim}
+              disabled={isPending || isConfirming}
+            >
+              {isPending ? 'Awaiting signature...' : isConfirming ? 'Mining...' : 'Claim Funds'}
+            </SharpButton>
+            <p style={{ marginTop: 12, fontSize: 12, color: textTertiary, lineHeight: 1.6 }}>
+              Your wallet address is cryptographically verified. No other wallet can claim these funds.
             </p>
 
-            {error && <div className="alert alert-error mt-4">✗ {error.message}</div>}
+            {error && <div className="alert alert-error" style={{ marginTop: 16 }}>{error.message}</div>}
           </div>
         )}
 
-        {/* ── Receipt ── */}
+        {/* Receipt */}
         {isSuccess && (
-          <div className="mt-4">
-            <p className="text-[11px] text-[var(--muted2)] mb-3">// claim confirmed</p>
-            <table className="w-full border-collapse mb-4">
-              <tbody>
-                <tr>
-                  <td className="text-[var(--pink)] text-xs w-32 pr-3 py-2 border-b border-[var(--border)]">received</td>
-                  <td className="text-[var(--green)] text-xs font-semibold py-2 border-b border-[var(--border)]">{formatAmt(net)}</td>
-                </tr>
-                <tr>
-                  <td className="text-[var(--pink)] text-xs w-32 pr-3 py-2 border-b border-[var(--border)]">fee_deducted</td>
-                  <td className="text-[var(--red)] text-xs py-2 border-b border-[var(--border)]">{feeAmt > 0n ? formatAmt(feeAmt) : 'none'}</td>
-                </tr>
-                <tr>
-                  <td className="text-[var(--pink)] text-xs w-32 pr-3 py-2">tx_hash</td>
-                  <td className="py-2 text-xs">
-                    <a href={`${chain?.blockExplorers?.default.url ?? 'https://basescan.org'}/tx/${claimHash}`} target="_blank" rel="noreferrer"
-                      className="text-[var(--cyan)] break-all hover:underline">
-                      {claimHash}
-                    </a>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+          <div style={{ marginTop: 16 }}>
+            <p style={{ fontSize: 12, color: textSecondary, marginBottom: 16, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Claim confirmed</p>
+            <div style={{ border: `1px solid ${border}`, marginBottom: 16 }}>
+              <div style={rowStyle}>
+                <div style={labelStyle}>Received</div>
+                <div style={{ ...valueStyle, color: '#34D399', fontWeight: 700 }}>{formatAmt(net)}</div>
+              </div>
+              <div style={rowStyle}>
+                <div style={labelStyle}>Fee Deducted</div>
+                <div style={{ ...valueStyle, color: '#F87171' }}>{feeAmt > 0n ? formatAmt(feeAmt) : 'none'}</div>
+              </div>
+              <div style={rowStyle}>
+                <div style={labelStyle}>Tx Hash</div>
+                <div style={valueStyle}>
+                  <a href={`${chain?.blockExplorers?.default.url ?? 'https://basescan.org'}/tx/${claimHash}`} target="_blank" rel="noreferrer"
+                    style={{ color: '#F2B705', wordBreak: 'break-all' }}>
+                    {claimHash}
+                  </a>
+                </div>
+              </div>
+            </div>
             <div className="alert alert-success">
-              ✓ funds claimed —{' '}
-              <a href={`${chain?.blockExplorers?.default.url ?? 'https://basescan.org'}/tx/${claimHash}`} target="_blank" rel="noreferrer">view on explorer ↗</a>
+              Funds claimed —{' '}
+              <a href={`${chain?.blockExplorers?.default.url ?? 'https://basescan.org'}/tx/${claimHash}`} target="_blank" rel="noreferrer">View on explorer ↗</a>
             </div>
           </div>
         )}
-
-      </CardBody>
-    </Card>
+      </SharpCard>
+    </div>
   );
 }
