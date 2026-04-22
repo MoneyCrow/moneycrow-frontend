@@ -3,7 +3,7 @@ import {
   useWriteContract, useReadContract, useAccount,
   useWaitForTransactionReceipt, usePublicClient,
 } from 'wagmi';
-import { formatEther, parseAbiItem } from 'viem';
+import { formatEther, formatUnits, parseAbiItem } from 'viem';
 import { ESCROW_ABI, getEscrowAddress, STATUS_LABEL, STATUS_VARIANT } from '../contracts/Escrow';
 import { Button }                     from '@/components/ui/button';
 import { Card, CardHeader, CardBody } from '@/components/ui/card';
@@ -27,6 +27,23 @@ const DEPLOY_BLOCK: Record<number, bigint> = {
  * Polygon publicnode: no documented cap, 10 000 is conservative and safe.
  */
 const CHUNK_SIZE = 10_000n;
+
+/**
+ * Known ERC-20 tokens per chain — used for display formatting in the list.
+ * Keyed by lowercase contract address.
+ */
+const KNOWN_TOKENS: Record<string, { symbol: string; decimals: number }> = {
+  // Base mainnet
+  '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': { symbol: 'USDC', decimals: 6  },
+  '0xfde4c96c8593536e31f229ea8f37b2ada2699bb2': { symbol: 'USDT', decimals: 6  },
+  '0x50c5725949a6f0c72e6c4a641f24049a917db0cb': { symbol: 'DAI',  decimals: 18 },
+  '0x4200000000000000000000000000000000000006': { symbol: 'WETH', decimals: 18 },
+  // Polygon mainnet
+  '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359': { symbol: 'USDC', decimals: 6  },
+  '0xc2132d05d31c914a87c6611c10748aeb04b58e8f': { symbol: 'USDT', decimals: 6  },
+  '0x8f3cf7ad23cd3cadbd9735aff958023239c6a063': { symbol: 'DAI',  decimals: 18 },
+  '0x7ceb23fd6bc0add59e62ac25578270cff1b9f619': { symbol: 'WETH', decimals: 18 },
+};
 
 const DEPOSITED_EVENT = parseAbiItem(
   'event Deposited(address indexed depositor, address indexed recipient, address token, uint256 amount, uint16 feeBps, string description, string recipientEmail, string recipientTelegram, string depositorEmail, string depositorTelegram)',
@@ -86,10 +103,17 @@ function EscrowListPanel({
 
   const trunc = (addr: string) => `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 
-  const fmtAmt = (r: EscrowRow) =>
-    r.token.toLowerCase() === ETH_ZERO
-      ? `${formatEther(r.amount)} ETH`
-      : `${r.amount} tokens`;
+  const fmtAmt = (r: EscrowRow) => {
+    if (r.token.toLowerCase() === ETH_ZERO) {
+      return `${formatEther(r.amount)} ETH`;
+    }
+    const known = KNOWN_TOKENS[r.token.toLowerCase()];
+    if (known) {
+      return `${formatUnits(r.amount, known.decimals)} ${known.symbol}`;
+    }
+    // Unknown ERC-20: assume 18 decimals, show truncated address
+    return `${formatUnits(r.amount, 18)} (${r.token.slice(0, 8)}…)`;
+  };
 
   const fmtDeadline = (ts: bigint) => {
     const now = BigInt(Math.floor(Date.now() / 1000));
@@ -147,14 +171,33 @@ function EscrowListPanel({
 
       if (warnings.length > 0) setScanWarnings(warnings);
 
-      // ── Deduplicate depositors ─────────────────────────────────────────────
+      // ── Deduplicate depositors, capture event amounts ─────────────────────
       // Reverse scan so the first entry in `order` is the earliest deposit.
-      const seen  = new Set<string>();
+      // We also capture the amount and token from the Deposited event because
+      // getEscrow() returns amount=0 for settled (Released/Refunded) escrows —
+      // the event log always carries the original deposited amount.
+      const seen = new Set<string>();
       const order: `0x${string}`[] = [];
+      const eventAmounts = new Map<string, { amount: bigint; token: `0x${string}` }>();
+
       for (const log of [...allLogs].reverse()) {
-        const dep = (log.args as { depositor?: `0x${string}` }).depositor;
-        if (dep && !seen.has(dep.toLowerCase())) {
-          seen.add(dep.toLowerCase());
+        const args = log.args as {
+          depositor?: `0x${string}`;
+          amount?:    bigint;
+          token?:     `0x${string}`;
+        };
+        const dep = args.depositor;
+        if (!dep) continue;
+        const key = dep.toLowerCase();
+        // Always record the event amount (first occurrence after reverse = latest deposit)
+        if (args.amount !== undefined) {
+          eventAmounts.set(key, {
+            amount: args.amount,
+            token:  args.token ?? (ETH_ZERO as `0x${string}`),
+          });
+        }
+        if (!seen.has(key)) {
+          seen.add(key);
           order.unshift(dep);
         }
       }
@@ -182,17 +225,25 @@ function EscrowListPanel({
       );
 
       setRows(
-        escrows.map((e, i) => ({
-          depositor:      order[i],
-          recipient:      e.recipient,
-          token:          e.token,
-          amount:         e.amount,
-          status:         Number(e.status),
-          feeBps:         Number(e.feeBps),
-          description:    e.description,
-          createdAt:      e.createdAt,
-          acceptDeadline: e.acceptDeadline,
-        })),
+        escrows.map((e, i) => {
+          const dep      = order[i];
+          const evtAmt   = eventAmounts.get(dep.toLowerCase());
+          // getEscrow() returns amount=0 for settled escrows; fall back to the
+          // Deposited event amount which always reflects the original deposit.
+          const amount = e.amount > 0n ? e.amount : (evtAmt?.amount ?? 0n);
+          const token  = e.token !== ETH_ZERO ? e.token : (evtAmt?.token ?? e.token);
+          return {
+            depositor:      dep,
+            recipient:      e.recipient,
+            token,
+            amount,
+            status:         Number(e.status),
+            feeBps:         Number(e.feeBps),
+            description:    e.description,
+            createdAt:      e.createdAt,
+            acceptDeadline: e.acceptDeadline,
+          };
+        }),
       );
       setScanned(true);
     } catch (err: unknown) {
