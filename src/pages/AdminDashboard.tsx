@@ -21,6 +21,13 @@ const DEPLOY_BLOCK: Record<number, bigint> = {
   137:  85739901n, // Polygon mainnet
 };
 
+/**
+ * Max blocks per getLogs call.
+ * Base mainnet.base.org free tier: 10 000-block hard cap.
+ * Polygon publicnode: no documented cap, 10 000 is conservative and safe.
+ */
+const CHUNK_SIZE = 10_000n;
+
 const DEPOSITED_EVENT = parseAbiItem(
   'event Deposited(address indexed depositor, address indexed recipient, address token, uint256 amount, uint16 feeBps, string description, string recipientEmail, string recipientTelegram, string depositorEmail, string depositorTelegram)',
 );
@@ -70,10 +77,12 @@ function EscrowListPanel({
   onSelectDepositor: (addr: string) => void;
 }) {
   const publicClient = usePublicClient();
-  const [rows,      setRows]      = useState<EscrowRow[]>([]);
-  const [scanning,  setScanning]  = useState(false);
-  const [scanned,   setScanned]   = useState(false);
-  const [scanError, setScanError] = useState('');
+  const [rows,         setRows]         = useState<EscrowRow[]>([]);
+  const [scanning,     setScanning]     = useState(false);
+  const [scanned,      setScanned]      = useState(false);
+  const [scanError,    setScanError]    = useState('');
+  const [scanProgress, setScanProgress] = useState('');  // e.g. "chunk 3/47"
+  const [scanWarnings, setScanWarnings] = useState<string[]>([]); // skipped chunk notes
 
   const trunc = (addr: string) => `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 
@@ -96,21 +105,53 @@ function EscrowListPanel({
     if (!publicClient) return;
     setScanning(true);
     setScanError('');
+    setScanProgress('');
+    setScanWarnings([]);
+
     try {
       const fromBlock = DEPLOY_BLOCK[chainId] ?? 0n;
+      const toBlock   = await publicClient.getBlockNumber();
 
-      const logs = await publicClient.getLogs({
-        address:   escrowAddr,
-        event:     DEPOSITED_EVENT,
-        fromBlock,
-        toBlock:   'latest',
-      });
+      // ── Chunked getLogs (10 000 blocks per call) ───────────────────────────
+      const totalChunks = Number((toBlock - fromBlock + CHUNK_SIZE) / CHUNK_SIZE);
+      const warnings: string[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const allLogs: any[] = [];
 
-      // Deduplicate depositors — reverse scan so first occurrence in `order`
-      // corresponds to the earliest deposit (latest deposit overwrites state).
+      let chunkFrom = fromBlock;
+      let chunkIdx  = 0;
+
+      while (chunkFrom <= toBlock) {
+        const chunkTo = chunkFrom + CHUNK_SIZE - 1n < toBlock
+          ? chunkFrom + CHUNK_SIZE - 1n
+          : toBlock;
+        chunkIdx++;
+        setScanProgress(`chunk ${chunkIdx}/${totalChunks}`);
+
+        try {
+          const chunk = await publicClient.getLogs({
+            address:   escrowAddr,
+            event:     DEPOSITED_EVENT,
+            fromBlock: chunkFrom,
+            toBlock:   chunkTo,
+          });
+          allLogs.push(...chunk);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          warnings.push(`skipped blocks ${chunkFrom}–${chunkTo}: ${msg}`);
+          console.warn(`[admin scan] chunk ${chunkIdx} failed:`, msg);
+        }
+
+        chunkFrom = chunkTo + 1n;
+      }
+
+      if (warnings.length > 0) setScanWarnings(warnings);
+
+      // ── Deduplicate depositors ─────────────────────────────────────────────
+      // Reverse scan so the first entry in `order` is the earliest deposit.
       const seen  = new Set<string>();
       const order: `0x${string}`[] = [];
-      for (const log of [...logs].reverse()) {
+      for (const log of [...allLogs].reverse()) {
         const dep = (log.args as { depositor?: `0x${string}` }).depositor;
         if (dep && !seen.has(dep.toLowerCase())) {
           seen.add(dep.toLowerCase());
@@ -118,7 +159,9 @@ function EscrowListPanel({
         }
       }
 
-      // Batch-read current on-chain state for every depositor
+      // ── Batch-read current on-chain state for every depositor ──────────────
+      setScanProgress('reading escrow state…');
+
       type GetEscrowResult = {
         depositor: `0x${string}`; recipient: `0x${string}`; token: `0x${string}`;
         amount: bigint; createdAt: bigint; status: number | bigint; feeBps: number | bigint;
@@ -156,6 +199,7 @@ function EscrowListPanel({
       setScanError(err instanceof Error ? err.message : String(err));
     } finally {
       setScanning(false);
+      setScanProgress('');
     }
   }, [publicClient, escrowAddr, chainId]);
 
@@ -188,12 +232,22 @@ function EscrowListPanel({
               // {rows.length} total · {active.length} active · {closed.length} closed
             </span>
           )}
-          {scanning && (
-            <span className="text-[11px] text-[var(--muted2)]">// querying chain…</span>
+          {scanning && scanProgress && (
+            <span className="text-[11px] text-[var(--cyan)] font-mono">
+              // {scanProgress}
+            </span>
           )}
         </div>
 
         {scanError && <div className="alert alert-error mb-3">✗ {scanError}</div>}
+
+        {scanWarnings.length > 0 && (
+          <div className="mb-3 text-[11px] font-mono" style={{ color: 'var(--orange)' }}>
+            {scanWarnings.map((w, i) => (
+              <div key={i}>⚠ {w}</div>
+            ))}
+          </div>
+        )}
 
         {scanned && rows.length === 0 && !scanning && (
           <p className="text-[var(--muted)] text-xs">// no deposits found in block range</p>
