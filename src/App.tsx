@@ -5,12 +5,13 @@ import DepositForm    from './pages/DepositForm';
 import EscrowStatus   from './pages/EscrowStatus';
 import AdminDashboard from './pages/AdminDashboard';
 import ClaimPage      from './pages/ClaimPage';
+import DemoAccept     from './pages/DemoAccept';
 import HowItWorks     from './pages/HowItWorks';
 import Faq            from './pages/Faq';
 import Footer         from './components/Footer';
 import { ESCROW_ABI, getEscrowAddress, SUPPORTED_CHAIN_IDS } from './contracts/Escrow';
 
-export type Page = 'deposit' | 'status' | 'admin' | 'claim' | 'how-it-works' | 'faq';
+export type Page = 'deposit' | 'status' | 'admin' | 'claim' | 'demo-accept' | 'how-it-works' | 'faq';
 
 const NETWORK_META: Record<number, { name: string; color: string; dot: string }> = {
   8453: { name: 'Base',    color: '#7ee8fa', dot: '#7ee8fa' },
@@ -87,7 +88,7 @@ function urlParam(key: string): string {
   catch { return ''; }
 }
 
-const VALID_TABS: Page[] = ['deposit', 'status', 'admin', 'claim', 'how-it-works', 'faq'];
+const VALID_TABS: Page[] = ['deposit', 'status', 'admin', 'claim', 'demo-accept', 'how-it-works', 'faq'];
 
 export default function App() {
   console.log('App mounting');
@@ -101,8 +102,11 @@ export default function App() {
     return VALID_TABS.includes(tab) ? tab : 'deposit';
   });
 
-  // Pre-fill the claim page depositor when arriving via a deep-link.
-  const [claimDepositor, setClaimDepositor] = useState(() => urlParam('depositor'));
+  // Pre-fill depositor for claim / demo-accept pages when arriving via a deep-link.
+  const [claimDepositor,     setClaimDepositor]     = useState(() => urlParam('depositor'));
+  const [demoAcceptDepositor] = useState(() =>
+    urlParam('tab') === 'demo-accept' ? urlParam('depositor') : '',
+  );
 
   // Admin tab visibility — read admin() from the contract, same check as AdminDashboard.
   const { address, chain } = useAccount();
@@ -160,6 +164,7 @@ export default function App() {
         {page === 'deposit'      && <DepositForm />}
         {page === 'status'       && <EscrowStatus onGoToClaim={goToClaim} />}
         {page === 'claim'        && <ClaimPage initialDepositor={claimDepositor} />}
+        {page === 'demo-accept'  && <DemoAccept initialDepositor={demoAcceptDepositor} />}
         {page === 'how-it-works' && <HowItWorks />}
         {page === 'faq'          && <Faq />}
         {page === 'admin'        && <AdminDashboard />}

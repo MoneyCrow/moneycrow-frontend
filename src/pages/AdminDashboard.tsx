@@ -5,6 +5,7 @@ import {
 } from 'wagmi';
 import { formatEther, formatUnits, parseAbiItem } from 'viem';
 import { ESCROW_ABI, getEscrowAddress, STATUS_LABEL, STATUS_VARIANT } from '../contracts/Escrow';
+import { DEMO_ABI, DEMO_STATUS_LABEL, DEMO_STATUS_VARIANT, getDemoAddress } from '../contracts/EscrowDemo';
 import { Button }                     from '@/components/ui/button';
 import { Card, CardHeader, CardBody } from '@/components/ui/card';
 import { Input }                      from '@/components/ui/input';
@@ -403,6 +404,295 @@ function EscrowListPanel({
   );
 }
 
+// ── DemoPanel ─────────────────────────────────────────────────────────────────
+
+/** Known tokens list for the demo token picker — same chains as DepositForm. */
+const DEMO_TOKENS: Record<number, { label: string; address: `0x${string}`; decimals: number }[]> = {
+  8453: [
+    { label: 'ETH (native)',  address: '0x0000000000000000000000000000000000000000', decimals: 18 },
+    { label: 'USDC',          address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6  },
+    { label: 'USDT',          address: '0xfde4C96c8593536E31F229EA8f37b2adA2699bb2', decimals: 6  },
+    { label: 'DAI',           address: '0x50c5725949A6F0c72E6C4a641f24049A917DB0Cb', decimals: 18 },
+    { label: 'WETH',          address: '0x4200000000000000000000000000000000000006', decimals: 18 },
+  ],
+  137: [
+    { label: 'ETH (native)',  address: '0x0000000000000000000000000000000000000000', decimals: 18 },
+    { label: 'USDC',          address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', decimals: 6  },
+    { label: 'USDT',          address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8f', decimals: 6  },
+    { label: 'DAI',           address: '0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063', decimals: 18 },
+    { label: 'WETH',          address: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619', decimals: 18 },
+  ],
+};
+
+function DemoPanel({ address: adminAddr, chain }: { address: `0x${string}`; chain: NonNullable<ReturnType<typeof useAccount>['chain']> }) {
+  const demoAddr = getDemoAddress(chain.id);
+  const tokens   = DEMO_TOKENS[chain.id] ?? DEMO_TOKENS[8453];
+
+  // Form state
+  const [recipient,         setRecipient]         = useState('');
+  const [selectedTokenIdx,  setSelectedTokenIdx]  = useState(0);
+  const [customToken,       setCustomToken]        = useState('');
+  const [showCustom,        setShowCustom]         = useState(false);
+  const [amount,            setAmount]             = useState('');
+  const [description,       setDescription]        = useState('');
+  const [recipientEmail,    setRecipientEmail]     = useState('');
+  const [recipientTelegram, setRecipientTelegram]  = useState('');
+  const [depositorEmail,    setDepositorEmail]     = useState('');
+  const [depositorTelegram, setDepositorTelegram]  = useState('');
+
+  // Reset token picker when chain changes
+  useEffect(() => { setSelectedTokenIdx(0); setCustomToken(''); setShowCustom(false); }, [chain.id]);
+
+  const selectedToken  = tokens[selectedTokenIdx];
+  const tokenAddress   = showCustom ? customToken : selectedToken.address;
+  const tokenDecimals  = showCustom ? 18 : selectedToken.decimals;
+  const isValidToken   = !showCustom || (customToken.length === 42 && customToken.startsWith('0x'));
+  const isValidRecip   = recipient.length === 42 && recipient.startsWith('0x');
+  const parsedAmount   = (() => {
+    try {
+      const n = parseFloat(amount);
+      if (isNaN(n) || n <= 0) return null;
+      return BigInt(Math.round(n * 10 ** tokenDecimals));
+    } catch { return null; }
+  })();
+  const canCreate = !!demoAddr && isValidRecip && !!parsedAmount && !!description && isValidToken;
+
+  // Read current demo state for this admin
+  const { data: demo, refetch: refetchDemo } = useReadContract({
+    address: demoAddr!, abi: DEMO_ABI, functionName: 'getDemoEscrow',
+    args: [adminAddr],
+    query: { enabled: !!demoAddr },
+  });
+  const hasDemo    = !!demo && demo.amount > 0n;
+  const demoStatus = hasDemo ? demo.status : -1;
+
+  // createDemo
+  const { writeContract: writeCreate, data: createHash, isPending: createPending,
+          error: createError, reset: resetCreate } = useWriteContract();
+  const { isLoading: createConfirming, isSuccess: createSuccess } =
+    useWaitForTransactionReceipt({ hash: createHash });
+
+  useEffect(() => { if (createSuccess) { refetchDemo(); } }, [createSuccess, refetchDemo]);
+
+  const handleCreate = () => {
+    if (!canCreate || !demoAddr) return;
+    resetCreate();
+    writeCreate({
+      address: demoAddr,
+      abi: DEMO_ABI,
+      functionName: 'createDemo',
+      args: [
+        recipient      as `0x${string}`,
+        tokenAddress   as `0x${string}`,
+        parsedAmount!,
+        description,
+        recipientEmail,
+        recipientTelegram,
+        depositorEmail,
+        depositorTelegram,
+      ],
+    });
+  };
+
+  // approveDemo
+  const { writeContract: writeApprove, data: approveHash, isPending: approvePending,
+          error: approveError, reset: resetApprove } = useWriteContract();
+  const { isLoading: approveConfirming, isSuccess: approveSuccess } =
+    useWaitForTransactionReceipt({ hash: approveHash });
+
+  useEffect(() => { if (approveSuccess) { refetchDemo(); } }, [approveSuccess, refetchDemo]);
+
+  const handleApproveDemo = () => {
+    if (!demoAddr) return;
+    resetApprove();
+    writeApprove({
+      address: demoAddr,
+      abi: DEMO_ABI,
+      functionName: 'approveDemo',
+      args: [adminAddr],
+    });
+  };
+
+  if (!demoAddr) {
+    return (
+      <Card>
+        <CardHeader dot="orange">
+          <span style={{ color: '#f59e0b' }}>demo_mode</span>
+        </CardHeader>
+        <CardBody>
+          <p className="text-[var(--muted)] text-xs">
+            // MoneyCrowDemo not yet deployed on this network.
+            Deploy with: <code>npx hardhat ignition deploy ignition/modules/Demo.ts --network {chain.name.toLowerCase()}</code>
+          </p>
+        </CardBody>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader dot="orange">
+        <span style={{ color: '#f59e0b' }}>demo_mode</span>
+        <span className="text-[var(--muted)]"> — createDemo / approveDemo</span>
+      </CardHeader>
+      <CardBody>
+
+        {/* Amber demo banner */}
+        <div style={{
+          background: '#f59e0b', color: '#000', fontFamily: 'monospace',
+          fontWeight: 700, padding: '8px 14px', borderRadius: 4, marginBottom: 16, fontSize: 12,
+        }}>
+          ⚠ DEMO MODE — no real funds are involved
+        </div>
+
+        {/* Current demo status */}
+        {hasDemo && (
+          <div className="mb-4 p-3 rounded border border-[var(--border)] text-xs font-mono">
+            <span className="text-[var(--muted)]">current_demo_status: </span>
+            <Badge variant={DEMO_STATUS_VARIANT[demoStatus] ?? 'pending'}>
+              {DEMO_STATUS_LABEL[demoStatus] ?? String(demoStatus)}
+            </Badge>
+            {demoStatus === 1 && (
+              <span className="text-[var(--muted2)] ml-2">— recipient signed, ready to approve</span>
+            )}
+            {demoStatus === 2 && (
+              <span className="text-[var(--muted2)] ml-2">— demo complete</span>
+            )}
+          </div>
+        )}
+
+        {/* approveDemo — shown when status is Accepted (1) */}
+        {demoStatus === 1 && (
+          <div className="mb-5">
+            {approveSuccess ? (
+              <div className="alert alert-success">✓ demo approved — flow complete</div>
+            ) : (
+              <>
+                <Button
+                  style={{ background: '#f59e0b', color: '#000', fontWeight: 700 }}
+                  onClick={handleApproveDemo}
+                  disabled={approvePending || approveConfirming}
+                >
+                  {approvePending ? '> awaiting signature...' : approveConfirming ? '> mining...' : '> approveDemo()'}
+                </Button>
+                {approveError && <div className="alert alert-error mt-2">✗ {approveError.message}</div>}
+              </>
+            )}
+            {approveHash && (
+              <div className="mt-1 text-[11px]">
+                <a href={`${chain.blockExplorers?.default.url ?? 'https://basescan.org'}/tx/${approveHash}`}
+                  target="_blank" rel="noreferrer" className="text-[var(--muted2)] hover:text-[var(--muted)]">
+                  // view tx ↗
+                </a>
+              </div>
+            )}
+            <hr className="border-[var(--border)] my-5" />
+          </div>
+        )}
+
+        {/* createDemo form */}
+        <p className="text-[11px] text-[var(--muted2)] mb-3">// createDemo — set up a simulated escrow</p>
+
+        <div className="grid gap-3 mb-4">
+
+          {/* Recipient */}
+          <div>
+            <Label htmlFor="demoRecipient">recipient_address</Label>
+            <Input id="demoRecipient" placeholder="0x..." value={recipient} onChange={e => setRecipient(e.target.value)} />
+          </div>
+
+          {/* Token picker */}
+          <div>
+            <Label htmlFor="demoToken">token</Label>
+            <div className="relative">
+              <select
+                id="demoToken"
+                value={showCustom ? '__custom__' : String(selectedTokenIdx)}
+                onChange={e => {
+                  if (e.target.value === '__custom__') { setShowCustom(true); }
+                  else { setShowCustom(false); setSelectedTokenIdx(Number(e.target.value)); }
+                }}
+                className="w-full appearance-none bg-[var(--surface)] border border-[var(--border)] text-[var(--fg)] font-mono text-xs rounded px-3 py-2 pr-8 focus:outline-none focus:border-[var(--cyan)]"
+              >
+                {tokens.map((t, i) => (
+                  <option key={t.address} value={String(i)}>{t.label}</option>
+                ))}
+                <option value="__custom__">custom address…</option>
+              </select>
+              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[var(--muted)] text-[10px]">▼</span>
+            </div>
+            {showCustom && (
+              <Input
+                className="mt-1.5"
+                placeholder="0x... ERC-20 token address"
+                value={customToken}
+                onChange={e => setCustomToken(e.target.value)}
+              />
+            )}
+          </div>
+
+          {/* Amount */}
+          <div>
+            <Label htmlFor="demoAmount">
+              amount <span className="text-[var(--muted2)]">({showCustom ? 'tokens' : selectedToken.label})</span>
+            </Label>
+            <Input id="demoAmount" type="number" min="0" step="any" placeholder="e.g. 1.5" value={amount} onChange={e => setAmount(e.target.value)} />
+          </div>
+
+          {/* Description */}
+          <div>
+            <Label htmlFor="demoDesc">description</Label>
+            <Input id="demoDesc" placeholder="e.g. Demo payment for consulting services" value={description} onChange={e => setDescription(e.target.value)} />
+          </div>
+
+          {/* Contact info */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor="demoREmail">recipient_email</Label>
+              <Input id="demoREmail" type="email" placeholder="recipient@example.com" value={recipientEmail} onChange={e => setRecipientEmail(e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="demoRTg">recipient_telegram</Label>
+              <Input id="demoRTg" placeholder="@username" value={recipientTelegram} onChange={e => setRecipientTelegram(e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="demoDEmail">depositor_email</Label>
+              <Input id="demoDEmail" type="email" placeholder="admin@example.com" value={depositorEmail} onChange={e => setDepositorEmail(e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="demoDTg">depositor_telegram</Label>
+              <Input id="demoDTg" placeholder="@username" value={depositorTelegram} onChange={e => setDepositorTelegram(e.target.value)} />
+            </div>
+          </div>
+        </div>
+
+        {createSuccess ? (
+          <div className="alert alert-success">
+            ✓ demo created — recipient notified to sign acceptance
+            {createHash && (
+              <span className="ml-2 text-[11px]">
+                <a href={`${chain.blockExplorers?.default.url ?? 'https://basescan.org'}/tx/${createHash}`}
+                  target="_blank" rel="noreferrer" className="underline">view tx ↗</a>
+              </span>
+            )}
+          </div>
+        ) : (
+          <Button
+            style={{ background: '#f59e0b', color: '#000', fontWeight: 700 }}
+            onClick={handleCreate}
+            disabled={!canCreate || createPending || createConfirming}
+          >
+            {createPending ? '> awaiting signature...' : createConfirming ? '> mining...' : '> createDemo()'}
+          </Button>
+        )}
+
+        {createError && <div className="alert alert-error mt-3">✗ {createError.message}</div>}
+
+      </CardBody>
+    </Card>
+  );
+}
+
 // ── AdminDashboard ─────────────────────────────────────────────────────────────
 
 export default function AdminDashboard() {
@@ -627,6 +917,11 @@ export default function AdminDashboard() {
           {feeError && <div className="alert alert-error mt-4">✗ {feeError.message}</div>}
         </CardBody>
       </Card>
+
+      {/* ── Demo mode ── */}
+      {chain && address && (
+        <DemoPanel address={address} chain={chain} />
+      )}
 
       {/* ── Escrow list ── */}
       <EscrowListPanel
