@@ -14,6 +14,25 @@ const ERC20_ABI = [
   { name: 'allowance', inputs: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }], outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
 ] as const;
 
+// ── Known tokens per chain ─────────────────────────────────────────────────────
+
+type TokenInfo = { symbol: string; address: `0x${string}`; decimals: number };
+
+const KNOWN_TOKENS: Record<number, TokenInfo[]> = {
+  8453: [ // Base mainnet
+    { symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6  },
+    { symbol: 'USDT', address: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2', decimals: 6  },
+    { symbol: 'DAI',  address: '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb', decimals: 18 },
+    { symbol: 'WETH', address: '0x4200000000000000000000000000000000000006', decimals: 18 },
+  ],
+  137: [ // Polygon mainnet
+    { symbol: 'USDC', address: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', decimals: 6  },
+    { symbol: 'USDT', address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F', decimals: 6  },
+    { symbol: 'DAI',  address: '0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063', decimals: 18 },
+    { symbol: 'WETH', address: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619', decimals: 18 },
+  ],
+};
+
 type Mode = 'eth' | 'erc20';
 
 export default function DepositForm() {
@@ -24,6 +43,8 @@ export default function DepositForm() {
   const [amount, setAmount]                 = useState('');
   const [description, setDescription]       = useState('');
   const [tokenAddr, setTokenAddr]           = useState('');
+  const [selectedToken, setSelectedToken]   = useState('');   // symbol key or 'custom'
+  const [customTokenAddr, setCustomTokenAddr] = useState('');
   const [approved, setApproved]             = useState(false);
 
   const [recipientEmail, setRecipientEmail]       = useState('');
@@ -34,7 +55,21 @@ export default function DepositForm() {
   const [contactError, setContactError]           = useState('');
   const [verifyToken, setVerifyToken]             = useState('');
 
-  const isValidToken = tokenAddr.length === 42 && tokenAddr.startsWith('0x');
+  // When the chain changes while in ERC20 mode, reset the token picker so the
+  // user doesn't accidentally send to the wrong chain's contract address.
+  useEffect(() => {
+    if (mode === 'erc20') {
+      setSelectedToken('');
+      setTokenAddr('');
+      setCustomTokenAddr('');
+      setApproved(false);
+    }
+  }, [chain?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const chainTokens   = KNOWN_TOKENS[chain?.id ?? 0] ?? [];
+  const knownToken    = chainTokens.find(t => t.symbol === selectedToken);
+  // Use on-chain decimals when available (sanity check), fall back to known value.
+  const isValidToken  = tokenAddr.length === 42 && tokenAddr.startsWith('0x');
 
   const { data: decimals }  = useReadContract({ address: tokenAddr as `0x${string}`, abi: ERC20_ABI, functionName: 'decimals',  query: { enabled: isValidToken } });
   const { data: symbol }    = useReadContract({ address: tokenAddr as `0x${string}`, abi: ERC20_ABI, functionName: 'symbol',    query: { enabled: isValidToken } });
@@ -69,6 +104,8 @@ export default function DepositForm() {
     setAmount('');
     setDescription('');
     setTokenAddr('');
+    setSelectedToken('');
+    setCustomTokenAddr('');
     setApproved(false);
     setRecipientEmail('');
     setRecipientTelegram('');
@@ -79,8 +116,10 @@ export default function DepositForm() {
     // verifyToken intentionally NOT cleared here — banner must stay visible
   }, [depositSuccess]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const effectiveDecimals = decimals ?? knownToken?.decimals ?? 18;
+
   const parsedAmount = (() => {
-    try { return mode === 'eth' ? parseEther(amount || '0') : parseUnits(amount || '0', decimals ?? 18); }
+    try { return mode === 'eth' ? parseEther(amount || '0') : parseUnits(amount || '0', effectiveDecimals); }
     catch { return 0n; }
   })();
 
@@ -213,10 +252,84 @@ export default function DepositForm() {
 
           {mode === 'erc20' && (
             <div>
-              <Label htmlFor="tokenAddr">token_address</Label>
-              <Input id="tokenAddr" placeholder="0x... (token contract)" value={tokenAddr}
-                onChange={e => { setTokenAddr(e.target.value); setApproved(false); }} required />
-              {symbol && <p className="mt-1.5 text-[11px] text-[var(--green)]">// detected: {symbol} ({decimals} decimals)</p>}
+              <Label htmlFor="tokenSelect">token</Label>
+
+              {/* ── Known token dropdown ── */}
+              <select
+                id="tokenSelect"
+                value={selectedToken}
+                onChange={e => {
+                  const sym = e.target.value;
+                  setSelectedToken(sym);
+                  setApproved(false);
+                  if (sym === 'custom') {
+                    setTokenAddr(customTokenAddr);
+                  } else {
+                    const found = chainTokens.find(t => t.symbol === sym);
+                    setTokenAddr(found?.address ?? '');
+                  }
+                }}
+                required
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  background: 'var(--surface2)',
+                  border: '1px solid var(--border2)',
+                  borderRadius: 3,
+                  fontSize: 12,
+                  color: selectedToken ? 'var(--text)' : 'var(--muted)',
+                  fontFamily: 'JetBrains Mono, monospace',
+                  outline: 'none',
+                  cursor: 'pointer',
+                  appearance: 'none',
+                  WebkitAppearance: 'none',
+                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23637777'/%3E%3C/svg%3E")`,
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'right 12px center',
+                  paddingRight: 32,
+                }}
+                onFocus={e => (e.currentTarget.style.borderColor = 'var(--cyan)')}
+                onBlur={e  => (e.currentTarget.style.borderColor = 'var(--border2)')}
+              >
+                <option value="" disabled style={{ color: 'var(--muted)', background: 'var(--surface)' }}>
+                  -- select token --
+                </option>
+                {chainTokens.map(t => (
+                  <option key={t.symbol} value={t.symbol} style={{ background: 'var(--surface)', color: 'var(--text)' }}>
+                    {t.symbol}
+                  </option>
+                ))}
+                <option value="custom" style={{ background: 'var(--surface)', color: 'var(--muted)' }}>
+                  custom address...
+                </option>
+              </select>
+
+              {/* ── Custom address input (collapsible) ── */}
+              {selectedToken === 'custom' && (
+                <div style={{ marginTop: 8 }}>
+                  <Input
+                    placeholder="0x... (token contract address)"
+                    value={customTokenAddr}
+                    onChange={e => {
+                      setCustomTokenAddr(e.target.value);
+                      setTokenAddr(e.target.value);
+                      setApproved(false);
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* ── Confirmation line ── */}
+              {knownToken && (
+                <p className="mt-1.5 text-[11px] text-[var(--green)]">
+                  // {knownToken.symbol} · {knownToken.address.slice(0, 10)}…{knownToken.address.slice(-6)} · {knownToken.decimals} decimals
+                </p>
+              )}
+              {selectedToken === 'custom' && symbol && (
+                <p className="mt-1.5 text-[11px] text-[var(--green)]">
+                  // detected: {symbol} ({effectiveDecimals} decimals)
+                </p>
+              )}
             </div>
           )}
 
@@ -228,7 +341,11 @@ export default function DepositForm() {
 
           <div>
             <Label htmlFor="amount">
-              {symbol ? `amount_${symbol.toLowerCase()}` : mode === 'eth' ? 'amount_eth' : 'amount_tokens'}
+              {symbol
+                ? `amount_${symbol.toLowerCase()}`
+                : knownToken
+                  ? `amount_${knownToken.symbol.toLowerCase()}`
+                  : mode === 'eth' ? 'amount_eth' : 'amount_tokens'}
             </Label>
             <Input id="amount" type="number" step="any" min="0"
               placeholder={mode === 'eth' ? '0.01' : '100'} value={amount}
