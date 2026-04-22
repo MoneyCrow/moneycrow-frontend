@@ -32,6 +32,7 @@ export default function DepositForm() {
   const [depositorTelegram, setDepositorTelegram] = useState('');
   const [terms, setTerms]                         = useState('');
   const [contactError, setContactError]           = useState('');
+  const [verifyToken, setVerifyToken]             = useState('');
 
   const isValidToken = tokenAddr.length === 42 && tokenAddr.startsWith('0x');
 
@@ -50,17 +51,17 @@ export default function DepositForm() {
   useEffect(() => {
     if (!depositSuccess) return;
 
-    // ── Telegram verification — silent fire-and-forget ────────────────────────
+    // ── Telegram verification — register token now; window.open waits for click ─
     if (depositorTelegram.trim()) {
-      const token    = crypto.randomUUID();
-      const handle   = depositorTelegram.trim();
-      const apiBase  = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001';
+      const token   = crypto.randomUUID();
+      const handle  = depositorTelegram.trim();
+      const apiBase = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001';
       fetch(`${apiBase}/telegram/verify`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ token, username: handle }),
       }).catch(() => {}); // silent — don't block the success flow
-      window.open(`https://t.me/MoneyCrowBot?start=verify_${token}`, '_blank', 'noopener,noreferrer');
+      setVerifyToken(token); // banner will call window.open on user click
     }
 
     // ── Reset form ────────────────────────────────────────────────────────────
@@ -75,6 +76,7 @@ export default function DepositForm() {
     setDepositorTelegram('');
     setTerms('');
     setContactError('');
+    // verifyToken intentionally NOT cleared here — banner must stay visible
   }, [depositSuccess]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const parsedAmount = (() => {
@@ -309,6 +311,34 @@ export default function DepositForm() {
               view on explorer ↗
             </a>
           </div>
+        )}
+
+        {verifyToken && (
+          <button
+            type="button"
+            onClick={() => {
+              window.open(
+                `https://t.me/escrow_notifier_bot?start=verify_${verifyToken}`,
+                '_blank',
+                'noopener,noreferrer',
+              );
+              setVerifyToken('');
+            }}
+            className="w-full mt-3 text-left cursor-pointer"
+            style={{
+              display: 'block',
+              padding: '10px 14px',
+              background: 'rgba(0,180,216,0.07)',
+              border: '1px solid rgba(0,180,216,0.35)',
+              borderRadius: 4,
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 12,
+              color: 'var(--cyan)',
+              lineHeight: 1.5,
+            }}
+          >
+            ✅ deposit confirmed — tap here to verify your Telegram and receive notifications
+          </button>
         )}
         {(depositError ?? approveError) && (
           <div className="alert alert-error mt-4">
