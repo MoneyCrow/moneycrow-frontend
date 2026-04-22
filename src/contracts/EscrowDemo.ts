@@ -1,6 +1,6 @@
 export const DEMO_ADDRESS: Record<number, `0x${string}`> = {
-  8453: '0x04a58Bdb40A7bcC04A92FddF382F3D9e441C337e',
-  137:  '0xf245A3a3ddB375eFe336bD40Fa0b6d8e06598F12',
+  8453: '0xFc6e21b81aF72c8a2077d1C73CEb16716bcf6061',
+  137:  '0x0fF998cDC01E285473120a8279A1be74C3d57929',
 };
 
 export function getDemoAddress(chainId: number | undefined): `0x${string}` | undefined {

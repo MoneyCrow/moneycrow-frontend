@@ -1,7 +1,7 @@
 // New contract address — same on Base and Polygon (privacy refactor, 2026-04-22)
 export const ESCROW_ADDRESS: Record<number, `0x${string}`> = {
-  8453: '0xad29BABD124fF59a3C72E768e37dcC04CF1185eb', // Base mainnet
-  137:  '0xad29BABD124fF59a3C72E768e37dcC04CF1185eb', // Polygon mainnet
+  8453: '0xECD16558707A0Efa8a607110a55579744bb75497', // Base mainnet
+  137:  '0xe04F8AdcD2b7ea27888E6022276B1a974C116e8a', // Polygon mainnet
 };
 
 export const SUPPORTED_CHAIN_IDS = [8453, 137] as const;
