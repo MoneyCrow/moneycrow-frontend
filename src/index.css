@@ -63,6 +63,15 @@ select option { background: var(--card-bg); color: var(--text-primary); }
 
 .sharp-fade-in { animation: sharpFadeIn 0.18s ease; }
 
+/* Mobile touch-target minimums (<1024px).
+   Desktop rendering is untouched; classes only activate on mobile. */
+@media (max-width: 1023.98px) {
+  .sharp-touch { min-height: 44px; }
+  .sharp-touch-lg { min-height: 48px; }
+  /* Collapse any grid opted-in via `mobile-stack` to a single column on mobile. */
+  .mobile-stack { grid-template-columns: 1fr !important; }
+}
+
 .alert { margin-top: 12px; padding: 10px 14px; font-size: 13px; border-left: 3px solid; }
 .alert-success { background: rgba(52,211,153,0.06); border-color: #34D399; color: #34D399; }
 .alert-error   { background: rgba(248,113,113,0.06); border-color: #F87171; color: #F87171; }

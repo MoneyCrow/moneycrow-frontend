@@ -6,9 +6,10 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   hint?: string;
 }
 
-export function SharpInput({ label, hint, style, ...rest }: InputProps) {
+export function SharpInput({ label, hint, style, className, ...rest }: InputProps) {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
+  const combinedClass = ['sharp-touch', className].filter(Boolean).join(' ');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {label && (
@@ -17,6 +18,7 @@ export function SharpInput({ label, hint, style, ...rest }: InputProps) {
         </label>
       )}
       <input
+        className={combinedClass}
         style={{
           width: '100%', padding: '11px 14px', borderRadius: 0,
           background: isDark ? '#1C1C1C' : '#FFFFFF',
@@ -40,9 +42,10 @@ interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
   hint?: string;
 }
 
-export function SharpTextarea({ label, hint, style, ...rest }: TextareaProps) {
+export function SharpTextarea({ label, hint, style, className, ...rest }: TextareaProps) {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
+  const combinedClass = ['sharp-touch', className].filter(Boolean).join(' ');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {label && (
@@ -51,6 +54,7 @@ export function SharpTextarea({ label, hint, style, ...rest }: TextareaProps) {
         </label>
       )}
       <textarea
+        className={combinedClass}
         style={{
           width: '100%', padding: '11px 14px', borderRadius: 0,
           background: isDark ? '#1C1C1C' : '#FFFFFF',
@@ -75,9 +79,10 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   options: Option[];
 }
 
-export function SharpSelect({ label, options, style, ...rest }: SelectProps) {
+export function SharpSelect({ label, options, style, className, ...rest }: SelectProps) {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
+  const combinedClass = ['sharp-touch', className].filter(Boolean).join(' ');
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {label && (
@@ -86,6 +91,7 @@ export function SharpSelect({ label, options, style, ...rest }: SelectProps) {
         </label>
       )}
       <select
+        className={combinedClass}
         style={{
           width: '100%', padding: '11px 14px', borderRadius: 0,
           background: isDark ? '#1C1C1C' : '#FFFFFF',

@@ -419,7 +419,7 @@ export default function DepositForm() {
                 <span>→</span>
                 <span style={{ color: canDeposit ? '#F2B705' : textSecondary, fontWeight: 600 }}>Step 2: Deposit</span>
               </div>
-              <div style={{ display: 'flex', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                 {!canDeposit && (
                   <SharpButton type="button" onClick={handleApprove}
                     disabled={approvePending || approveConfirming || !isValidToken || !amount}>

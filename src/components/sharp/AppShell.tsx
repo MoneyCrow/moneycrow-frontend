@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTheme } from '../../context/ThemeContext';
 import logoGold from '../../assets/logo-gold.png';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { useIsMobile } from './useIsMobile';
+import { MobileNav } from './MobileNav';
 
 export type Page = 'landing' | 'create' | 'status' | 'claim' | 'demo-accept' | 'admin' | 'how-it-works' | 'faq';
 
@@ -114,49 +116,96 @@ function Sidebar({ page, onNav, collapsed, onToggle, isAdmin }: {
   );
 }
 
-function TopBar({ sidebarWidth, onToggleTheme }: { sidebarWidth: number; onToggleTheme: () => void }) {
+function TopBar({ sidebarWidth, onToggleTheme, isMobile, onOpenMenu }: {
+  sidebarWidth: number;
+  onToggleTheme: () => void;
+  isMobile: boolean;
+  onOpenMenu: () => void;
+}) {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const bg = isDark ? '#111111' : '#E8E8E3';
   const border = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.10)';
   const textSecondary = isDark ? 'rgba(255,255,255,0.40)' : 'rgba(17,17,17,0.45)';
+  const textPrimary = isDark ? '#FFFFFF' : '#111111';
 
   return (
     <div style={{
-      position: 'fixed', top: 0, left: sidebarWidth, right: 0, height: 64,
+      position: 'fixed', top: 0, left: isMobile ? 0 : sidebarWidth, right: 0, height: 64,
       background: bg, borderBottom: `1px solid ${border}`,
-      display: 'flex', alignItems: 'center', padding: '0 36px',
-      zIndex: 99, transition: 'left 0.2s ease', gap: 14,
+      display: 'flex', alignItems: 'center',
+      padding: isMobile ? '0 16px' : '0 36px',
+      zIndex: 99, transition: 'left 0.2s ease',
+      gap: isMobile ? 10 : 14,
     }}>
+      {/* Mobile-only compact logo */}
+      {isMobile && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <img src={logoGold} alt="" style={{ width: 24, height: 24, objectFit: 'contain' }} />
+          <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15, color: textPrimary, letterSpacing: '-0.2px' }}>
+            MoneyCrow
+          </span>
+        </div>
+      )}
+
       <div style={{ flex: 1 }} />
 
-      {/* Audit badge */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 12px', border: '1px solid rgba(74,222,128,0.2)', background: 'rgba(74,222,128,0.06)' }}>
-        <span style={{ width: 5, height: 5, background: '#4ADE80' }} />
-        <span style={{ fontSize: 11, fontWeight: 700, color: '#4ADE80', letterSpacing: '0.10em', textTransform: 'uppercase', fontFamily: "'Space Grotesk', sans-serif" }}>Audited</span>
-      </div>
+      {/* Audit badge — desktop only */}
+      {!isMobile && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 12px', border: '1px solid rgba(74,222,128,0.2)', background: 'rgba(74,222,128,0.06)' }}>
+          <span style={{ width: 5, height: 5, background: '#4ADE80' }} />
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#4ADE80', letterSpacing: '0.10em', textTransform: 'uppercase', fontFamily: "'Space Grotesk', sans-serif" }}>Audited</span>
+        </div>
+      )}
 
-      {/* Theme toggle */}
-      <button onClick={onToggleTheme} style={{
-        display: 'flex', alignItems: 'center', border: `1px solid ${border}`,
-        background: 'transparent', cursor: 'pointer', padding: 0, overflow: 'hidden', borderRadius: 0,
-      }}>
-        {(['Dark', 'Light'] as const).map(opt => {
-          const isActive = (opt === 'Dark' && isDark) || (opt === 'Light' && !isDark);
-          return (
-            <span key={opt} style={{
-              padding: '6px 12px', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
-              fontFamily: "'Space Grotesk', sans-serif",
-              background: isActive ? '#F2B705' : 'transparent',
-              color: isActive ? '#111111' : textSecondary,
-              display: 'block',
-            }}>{opt}</span>
-          );
-        })}
-      </button>
+      {/* Theme toggle — desktop only (mobile toggle lives in the drawer footer) */}
+      {!isMobile && (
+        <button onClick={onToggleTheme} style={{
+          display: 'flex', alignItems: 'center', border: `1px solid ${border}`,
+          background: 'transparent', cursor: 'pointer', padding: 0, overflow: 'hidden', borderRadius: 0,
+        }}>
+          {(['Dark', 'Light'] as const).map(opt => {
+            const isActive = (opt === 'Dark' && isDark) || (opt === 'Light' && !isDark);
+            return (
+              <span key={opt} style={{
+                padding: '6px 12px', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+                fontFamily: "'Space Grotesk', sans-serif",
+                background: isActive ? '#F2B705' : 'transparent',
+                color: isActive ? '#111111' : textSecondary,
+                display: 'block',
+              }}>{opt}</span>
+            );
+          })}
+        </button>
+      )}
 
-      {/* Wallet — use existing RainbowKit ConnectButton */}
-      <ConnectButton />
+      {/* Wallet — RainbowKit handles its own compact/full layout.
+          On mobile the main wallet entry point lives in the drawer footer, so
+          we hide this instance to avoid doubling up in a cramped topbar. */}
+      {!isMobile && <ConnectButton />}
+
+      {/* Hamburger — mobile only, last element */}
+      {isMobile && (
+        <button
+          onClick={onOpenMenu}
+          aria-label="Open menu"
+          style={{
+            width: 44, height: 44, flexShrink: 0,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            border: `1px solid ${border}`, background: 'transparent',
+            color: textPrimary, cursor: 'pointer',
+            transition: 'background 0.15s ease',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'; }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <line x1="3" y1="6"  x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
@@ -165,15 +214,65 @@ export function AppShell({ page, onNav, children, isAdmin }: {
   page: Page; onNav: (p: Page) => void; children: ReactNode; isAdmin: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { toggleTheme, theme } = useTheme();
+  const isMobile = useIsMobile();
   const sw = collapsed ? 56 : 232;
   const isDark = theme === 'dark';
 
+  // Body scroll lock while the mobile drawer is open.
+  useEffect(() => {
+    if (mobileMenuOpen) {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => { document.body.style.overflow = prev; };
+    }
+  }, [mobileMenuOpen]);
+
+  // ESC closes the drawer.
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMobileMenuOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mobileMenuOpen]);
+
+  // Crossing from mobile→desktop auto-closes the drawer (belt-and-braces;
+  // MobileNav also watches this internally).
+  useEffect(() => {
+    if (!isMobile && mobileMenuOpen) setMobileMenuOpen(false);
+  }, [isMobile, mobileMenuOpen]);
+
   return (
     <div style={{ minHeight: '100vh', background: isDark ? '#161616' : '#F2F2ED', fontFamily: "'Space Grotesk', sans-serif", color: isDark ? '#FFFFFF' : '#111111' }}>
-      <Sidebar page={page} onNav={onNav} collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} isAdmin={isAdmin} />
-      <TopBar sidebarWidth={sw} onToggleTheme={toggleTheme} />
-      <main style={{ marginLeft: sw, marginTop: 64, minHeight: 'calc(100vh - 64px)', padding: '44px 48px', transition: 'margin-left 0.2s ease' }}>
+      {isMobile && (
+        <MobileNav
+          open={mobileMenuOpen}
+          onClose={() => setMobileMenuOpen(false)}
+          page={page}
+          onNav={onNav}
+          isAdmin={isAdmin}
+        />
+      )}
+
+      {!isMobile && (
+        <Sidebar page={page} onNav={onNav} collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} isAdmin={isAdmin} />
+      )}
+
+      <TopBar
+        sidebarWidth={sw}
+        onToggleTheme={toggleTheme}
+        isMobile={isMobile}
+        onOpenMenu={() => setMobileMenuOpen(true)}
+      />
+
+      <main style={{
+        marginLeft: isMobile ? 0 : sw,
+        marginTop: 64,
+        minHeight: 'calc(100vh - 64px)',
+        padding: isMobile ? '28px 20px' : '44px 48px',
+        transition: 'margin-left 0.2s ease',
+      }}>
         <div key={page} className="sharp-fade-in">
           {children}
         </div>
