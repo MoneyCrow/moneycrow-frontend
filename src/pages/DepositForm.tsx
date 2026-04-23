@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useWriteContract, useAccount, useWaitForTransactionReceipt, useReadContract } from 'wagmi';
-import { parseEther, parseUnits, keccak256, encodePacked } from 'viem';
+import { parseEther, parseUnits } from 'viem';
 import { ESCROW_ABI, getEscrowAddress } from '../contracts/Escrow';
 import { SharpButton } from '../components/sharp/SharpButton';
 import { SharpCard } from '../components/sharp/SharpCard';
@@ -132,7 +132,9 @@ export default function DepositForm() {
       return;
     }
 
-    // Register metadata with backend and get termsHash
+    // Register metadata with backend and get termsHash.
+    // Abort if registration fails — proceeding without it means no notifications
+    // and no description/terms visible to the recipient.
     const apiBase = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001';
     let termsHash: `0x${string}`;
     try {
@@ -154,8 +156,8 @@ export default function DepositForm() {
       if (!data.ok || !data.termsHash) throw new Error('Register failed');
       termsHash = data.termsHash as `0x${string}`;
     } catch {
-      // Fallback: compute locally if backend is unreachable
-      termsHash = keccak256(encodePacked(['string', 'string'], [description, terms]));
+      setContactError('Could not reach server — please try again');
+      return;
     }
 
     if (mode === 'eth') {

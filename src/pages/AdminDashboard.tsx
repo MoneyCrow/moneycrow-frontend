@@ -317,6 +317,7 @@ function DemoPanel({ address: adminAddr, chain }: { address: `0x${string}`; chai
   const [recipientTelegram, setRecipientTelegram]  = useState('');
   const [depositorEmail,    setDepositorEmail]     = useState('');
   const [depositorTelegram, setDepositorTelegram]  = useState('');
+  const [createErrorMsg,    setCreateErrorMsg]     = useState('');
 
   useEffect(() => { setSelectedTokenIdx(0); setCustomToken(''); setShowCustom(false); }, [chain.id]);
 
@@ -349,6 +350,9 @@ function DemoPanel({ address: adminAddr, chain }: { address: `0x${string}`; chai
   const handleCreate = async () => {
     if (!canCreate || !demoAddr || !address) return;
     resetCreate();
+    setCreateErrorMsg('');
+    // Abort if registration fails — proceeding without it means no notifications
+    // and no description visible to the recipient.
     const apiBase = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001';
     let termsHash: `0x${string}`;
     try {
@@ -369,9 +373,8 @@ function DemoPanel({ address: adminAddr, chain }: { address: `0x${string}`; chai
       if (!data.ok || !data.termsHash) throw new Error('Register failed');
       termsHash = data.termsHash as `0x${string}`;
     } catch {
-      // Fallback: compute locally
-      const { keccak256, encodePacked } = await import('viem');
-      termsHash = keccak256(encodePacked(['string', 'string'], [description, '']));
+      setCreateErrorMsg('Could not reach server — please try again');
+      return;
     }
     writeCreate({
       address: demoAddr, abi: DEMO_ABI, functionName: 'createDemo',
@@ -524,6 +527,7 @@ function DemoPanel({ address: adminAddr, chain }: { address: `0x${string}`; chai
           </SharpButton>
         )}
 
+        {createErrorMsg && <div className="alert alert-error" style={{ marginTop: 12 }}>{createErrorMsg}</div>}
         {createError && <div className="alert alert-error" style={{ marginTop: 12 }}>{createError.message}</div>}
       </div>
     </SharpCard>
