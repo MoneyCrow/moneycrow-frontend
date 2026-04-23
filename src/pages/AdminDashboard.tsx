@@ -699,7 +699,7 @@ export default function AdminDashboard() {
                 </div>
               ) : (
                 <>
-                  <div style={{ display: 'flex', gap: 10 }}>
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                     <SharpButton
                       style={{ background: 'rgba(52,211,153,0.15)', color: '#34D399', border: '1px solid rgba(52,211,153,0.3)' }}
                       onClick={handleApprove}

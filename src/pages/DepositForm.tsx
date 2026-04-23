@@ -234,6 +234,7 @@ export default function DepositForm() {
             <button
               key={m}
               type="button"
+              className="sharp-touch"
               onClick={() => { setMode(m); setApproved(false); }}
               style={{
                 padding: '8px 20px', border: 'none', cursor: 'pointer',

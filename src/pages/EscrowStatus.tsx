@@ -239,6 +239,7 @@ export default function EscrowStatus({ onGoToClaim }: Props) {
               <button
                 key={chain.id}
                 type="button"
+                className="sharp-touch"
                 onClick={() => { setSelectedChainId(chain.id); setQuery(''); }}
                 style={{
                   padding: '8px 20px', border: 'none', cursor: 'pointer',
