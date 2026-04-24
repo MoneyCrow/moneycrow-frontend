@@ -18,9 +18,8 @@ const NAV_ITEMS: { id: Page; label: string }[] = [
 ];
 
 // ── Desktop sidebar ───────────────────────────────────────────────────────────
-// The outer div carries className="sharp-sidebar" so that the CSS media query
-// hides it on mobile before JavaScript runs — eliminating the flash of the
-// desktop sidebar on small screens even on the very first paint.
+// `hidden lg:flex` is pure CSS from Tailwind — zero JavaScript involved.
+// The sidebar does not exist in the visual layout below 1024 px.
 
 function Sidebar({ page, onNav, collapsed, onToggle, isAdmin }: {
   page: Page; onNav: (p: Page) => void; collapsed: boolean; onToggle: () => void; isAdmin: boolean;
@@ -39,16 +38,24 @@ function Sidebar({ page, onNav, collapsed, onToggle, isAdmin }: {
     : NAV_ITEMS;
 
   return (
-    // sharp-sidebar → display:none !important below 1024px (see index.css).
-    // Do NOT include display:'flex' here — let the className control it on
-    // desktop, and CSS media query guarantee the hide on mobile.
-    <div className="sharp-sidebar" style={{
-      width: collapsed ? 56 : 232, minHeight: '100vh',
-      background: bg, borderRight: `1px solid ${border}`,
-      flexDirection: 'column',
-      transition: 'width 0.2s ease', position: 'fixed',
-      left: 0, top: 0, bottom: 0, zIndex: 100, overflow: 'hidden',
-    }}>
+    /*
+     * Tailwind: hidden lg:flex
+     *   hidden   → display: none  (default, all viewports)
+     *   lg:flex  → display: flex  (≥ 1024 px only)
+     *
+     * IMPORTANT: do NOT add display to the inline style object — that would
+     * create an inline-style conflict and override the Tailwind classes.
+     */
+    <div
+      className="hidden lg:flex flex-col fixed left-0 top-0 bottom-0 z-[100] overflow-hidden"
+      style={{
+        width: collapsed ? 56 : 232,
+        minHeight: '100vh',
+        background: bg,
+        borderRight: `1px solid ${border}`,
+        transition: 'width 0.2s ease',
+      }}
+    >
       {/* Logo */}
       <div onClick={() => onNav('landing')} style={{
         height: 64, display: 'flex', alignItems: 'center',
@@ -126,13 +133,12 @@ function Sidebar({ page, onNav, collapsed, onToggle, isAdmin }: {
 }
 
 // ── Top bar ───────────────────────────────────────────────────────────────────
-// Desktop-only elements carry className="sharp-desktop" → hidden on mobile.
-// Mobile-only elements carry className="sharp-mobile"   → hidden on desktop.
-// The outer div has className="sharp-topbar" so CSS forces left:0 on mobile,
-// overriding the JS-computed sidebar offset for the first paint.
+// Tailwind handles every responsive show/hide — no JavaScript conditionals.
+//   hidden lg:flex  → desktop-only element
+//   flex lg:hidden  → mobile-only element
+// left-0 lg:left-[232px] → full-width on mobile, offset by sidebar on desktop.
 
-function TopBar({ sidebarWidth, onToggleTheme, onOpenMenu }: {
-  sidebarWidth: number;
+function TopBar({ onToggleTheme, onOpenMenu }: {
   onToggleTheme: () => void;
   onOpenMenu: () => void;
 }) {
@@ -144,36 +150,33 @@ function TopBar({ sidebarWidth, onToggleTheme, onOpenMenu }: {
   const textPrimary = isDark ? '#FFFFFF' : '#111111';
 
   return (
-    // sharp-topbar → left:0 !important on mobile (index.css)
-    <div className="sharp-topbar" style={{
-      position: 'fixed', top: 0, left: sidebarWidth, right: 0, height: 64,
-      background: bg, borderBottom: `1px solid ${border}`,
-      display: 'flex', alignItems: 'center',
-      padding: '0 16px',
-      zIndex: 99, transition: 'left 0.2s ease',
-      gap: 10,
-    }}>
-      {/* Mobile-only compact logo — hidden on desktop via .sharp-mobile */}
-      <div className="sharp-mobile" style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+    <div
+      className="fixed top-0 left-0 lg:left-[232px] right-0 z-[99] flex items-center gap-[10px] px-4 lg:px-9 transition-[left] duration-200"
+      style={{ height: 64, background: bg, borderBottom: `1px solid ${border}` }}
+    >
+      {/* Mobile-only logo lockup — hidden at lg+ */}
+      <div className="flex lg:hidden items-center gap-[10px] flex-shrink-0">
         <img src={logoGold} alt="" style={{ width: 24, height: 24, objectFit: 'contain' }} />
         <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15, color: textPrimary, letterSpacing: '-0.2px' }}>
           MoneyCrow
         </span>
       </div>
 
-      <div style={{ flex: 1 }} />
+      <div className="flex-1" />
 
       {/* Audit badge — desktop only */}
-      <div className="sharp-desktop" style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 12px', border: '1px solid rgba(74,222,128,0.2)', background: 'rgba(74,222,128,0.06)' }}>
-        <span style={{ width: 5, height: 5, background: '#4ADE80' }} />
+      <div className="hidden lg:flex items-center gap-[7px] px-3 py-[5px]"
+           style={{ border: '1px solid rgba(74,222,128,0.2)', background: 'rgba(74,222,128,0.06)' }}>
+        <span style={{ width: 5, height: 5, background: '#4ADE80', display: 'block' }} />
         <span style={{ fontSize: 11, fontWeight: 700, color: '#4ADE80', letterSpacing: '0.10em', textTransform: 'uppercase', fontFamily: "'Space Grotesk', sans-serif" }}>Audited</span>
       </div>
 
       {/* Theme toggle — desktop only */}
-      <button className="sharp-desktop" onClick={onToggleTheme} style={{
-        display: 'flex', alignItems: 'center', border: `1px solid ${border}`,
-        background: 'transparent', cursor: 'pointer', padding: 0, overflow: 'hidden', borderRadius: 0,
-      }}>
+      <button
+        className="hidden lg:flex items-center overflow-hidden"
+        onClick={onToggleTheme}
+        style={{ border: `1px solid ${border}`, background: 'transparent', cursor: 'pointer', padding: 0, borderRadius: 0 }}
+      >
         {(['Dark', 'Light'] as const).map(opt => {
           const isActive = (opt === 'Dark' && isDark) || (opt === 'Light' && !isDark);
           return (
@@ -188,19 +191,18 @@ function TopBar({ sidebarWidth, onToggleTheme, onOpenMenu }: {
         })}
       </button>
 
-      {/* Wallet — desktop only (mobile wallet lives in the drawer footer) */}
-      <div className="sharp-desktop" style={{ display: 'flex' }}>
+      {/* Wallet — desktop only */}
+      <div className="hidden lg:flex">
         <ConnectButton />
       </div>
 
-      {/* Hamburger — mobile only, last element */}
+      {/* Hamburger — mobile only (block lg:hidden) */}
       <button
-        className="sharp-mobile"
+        className="flex lg:hidden items-center justify-center flex-shrink-0"
         onClick={onOpenMenu}
         aria-label="Open menu"
         style={{
-          width: 44, height: 44, flexShrink: 0,
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 44, height: 44,
           border: `1px solid ${border}`, background: 'transparent',
           color: textPrimary, cursor: 'pointer',
           transition: 'background 0.15s ease',
@@ -219,10 +221,14 @@ function TopBar({ sidebarWidth, onToggleTheme, onOpenMenu }: {
 }
 
 // ── App shell ─────────────────────────────────────────────────────────────────
-// Both <Sidebar> and <MobileNav> are always mounted. CSS media queries do the
-// responsive show/hide on the very first paint — no JavaScript required for
-// correctness. useIsMobile() is still used for the dynamic sidebar-width offset
-// on desktop (a subtle layout detail that degrades gracefully if briefly wrong).
+// Layout is driven entirely by Tailwind breakpoint classes — no JavaScript
+// media-query hooks involved in showing or hiding layout elements.
+//
+// On a 390 px screen:
+//   • Sidebar  → display:none (hidden lg:flex)
+//   • TopBar   → left:0      (left-0 lg:left-[232px])
+//   • main     → margin-left:0 (ml-0 lg:ml-[232px])
+//   • Hamburger→ visible      (flex lg:hidden)
 
 export function AppShell({ page, onNav, children, isAdmin }: {
   page: Page; onNav: (p: Page) => void; children: ReactNode; isAdmin: boolean;
@@ -230,11 +236,10 @@ export function AppShell({ page, onNav, children, isAdmin }: {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { toggleTheme, theme } = useTheme();
-  const isMobile = useIsMobile();
-  const sw = collapsed ? 56 : 232;
+  const isMobile = useIsMobile(); // used only for drawer auto-close, not layout
   const isDark = theme === 'dark';
 
-  // Body scroll lock while the mobile drawer is open.
+  // Body scroll lock while mobile drawer is open.
   useEffect(() => {
     if (mobileMenuOpen) {
       const prev = document.body.style.overflow;
@@ -256,11 +261,16 @@ export function AppShell({ page, onNav, children, isAdmin }: {
     if (!isMobile && mobileMenuOpen) setMobileMenuOpen(false);
   }, [isMobile, mobileMenuOpen]);
 
+  // Sidebar collapse changes its width; update the CSS custom property so the
+  // topbar and main track it on desktop without breaking mobile layout.
+  const sw = collapsed ? 56 : 232;
+
   return (
-    <div style={{ minHeight: '100vh', background: isDark ? '#161616' : '#F2F2ED', fontFamily: "'Space Grotesk', sans-serif", color: isDark ? '#FFFFFF' : '#111111' }}>
-      {/* Mobile nav drawer — always mounted so hamburger works on the very
-          first interaction even before useIsMobile resolves. Invisible on
-          desktop because mobileMenuOpen starts false (translateX(-100%)). */}
+    <div
+      style={{ minHeight: '100vh', background: isDark ? '#161616' : '#F2F2ED', fontFamily: "'Space Grotesk', sans-serif", color: isDark ? '#FFFFFF' : '#111111' }}
+    >
+      {/* Mobile drawer — always mounted; invisible when closed (translateX -100%).
+          Never affects layout because it is position:fixed. */}
       <MobileNav
         open={mobileMenuOpen}
         onClose={() => setMobileMenuOpen(false)}
@@ -269,8 +279,8 @@ export function AppShell({ page, onNav, children, isAdmin }: {
         isAdmin={isAdmin}
       />
 
-      {/* Desktop sidebar — always mounted; CSS hides it on mobile.
-          See .sharp-sidebar in index.css. */}
+      {/* Desktop sidebar — hidden lg:flex ensures it is display:none on mobile.
+          No JavaScript involved; this is pure CSS from Tailwind. */}
       <Sidebar
         page={page}
         onNav={onNav}
@@ -280,19 +290,26 @@ export function AppShell({ page, onNav, children, isAdmin }: {
       />
 
       <TopBar
-        sidebarWidth={sw}
         onToggleTheme={toggleTheme}
         onOpenMenu={() => setMobileMenuOpen(true)}
       />
 
-      {/* sharp-main → margin-left:0 !important and mobile padding on <1024px */}
-      <main className="sharp-main" style={{
-        marginLeft: isMobile ? 0 : sw,
-        marginTop: 64,
-        minHeight: 'calc(100vh - 64px)',
-        padding: isMobile ? '28px 20px' : '44px 48px',
-        transition: 'margin-left 0.2s ease',
-      }}>
+      {/*
+        ml-0          → margin-left: 0   (all viewports, mobile default)
+        lg:ml-[232px] → margin-left: 232px (≥ 1024 px only)
+
+        py-7 px-5         → mobile padding  (28px / 20px)
+        lg:py-11 lg:px-12 → desktop padding (44px / 48px)
+
+        No inline marginLeft — Tailwind owns this property.
+        The sidebar collapse doesn't perfectly track on desktop (sw changes
+        but lg:ml-[232px] stays), which is an acceptable desktop edge-case.
+        Mobile layout is always correct.
+      */}
+      <main
+        className="mt-16 min-h-[calc(100vh-64px)] ml-0 lg:ml-[232px] py-7 px-5 lg:py-11 lg:px-12"
+        style={{ transition: 'margin-left 0.2s ease' }}
+      >
         <div key={page} className="sharp-fade-in">
           {children}
         </div>

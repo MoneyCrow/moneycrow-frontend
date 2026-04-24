@@ -72,25 +72,6 @@ select option { background: var(--card-bg); color: var(--text-primary); }
   .mobile-stack { grid-template-columns: 1fr !important; }
 }
 
-/* ── Responsive shell — CSS guarantees layout correctness before JS runs ──
-   Sidebar and TopBar are always in the DOM; these rules ensure the right
-   pieces are visible regardless of when React's useIsMobile hook fires.
-   !important beats inline styles so there is never a flash of the desktop
-   sidebar on mobile, even on the very first paint.                        */
-@media (max-width: 1023.98px) {
-  /* Desktop sidebar: never visible on mobile */
-  .sharp-sidebar  { display: none !important; }
-  /* Desktop-only header items (audit badge, theme toggle, wallet) */
-  .sharp-desktop  { display: none !important; }
-  /* TopBar must span full width — override JS-computed sidebar offset */
-  .sharp-topbar   { left: 0 !important; }
-  /* Main content: full width, mobile padding */
-  .sharp-main     { margin-left: 0 !important; padding: 28px 20px !important; }
-}
-@media (min-width: 1024px) {
-  /* Mobile-only items (logo lockup, hamburger) hidden on desktop */
-  .sharp-mobile   { display: none !important; }
-}
 
 .alert { margin-top: 12px; padding: 10px 14px; font-size: 13px; border-left: 3px solid; }
 .alert-success { background: rgba(52,211,153,0.06); border-color: #34D399; color: #34D399; }
