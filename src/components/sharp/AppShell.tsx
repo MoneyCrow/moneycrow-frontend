@@ -17,6 +17,11 @@ const NAV_ITEMS: { id: Page; label: string }[] = [
   { id: 'faq',          label: 'FAQ'           },
 ];
 
+// ── Desktop sidebar ───────────────────────────────────────────────────────────
+// The outer div carries className="sharp-sidebar" so that the CSS media query
+// hides it on mobile before JavaScript runs — eliminating the flash of the
+// desktop sidebar on small screens even on the very first paint.
+
 function Sidebar({ page, onNav, collapsed, onToggle, isAdmin }: {
   page: Page; onNav: (p: Page) => void; collapsed: boolean; onToggle: () => void; isAdmin: boolean;
 }) {
@@ -34,10 +39,13 @@ function Sidebar({ page, onNav, collapsed, onToggle, isAdmin }: {
     : NAV_ITEMS;
 
   return (
-    <div style={{
+    // sharp-sidebar → display:none !important below 1024px (see index.css).
+    // Do NOT include display:'flex' here — let the className control it on
+    // desktop, and CSS media query guarantee the hide on mobile.
+    <div className="sharp-sidebar" style={{
       width: collapsed ? 56 : 232, minHeight: '100vh',
       background: bg, borderRight: `1px solid ${border}`,
-      display: 'flex', flexDirection: 'column',
+      flexDirection: 'column',
       transition: 'width 0.2s ease', position: 'fixed',
       left: 0, top: 0, bottom: 0, zIndex: 100, overflow: 'hidden',
     }}>
@@ -70,6 +78,7 @@ function Sidebar({ page, onNav, collapsed, onToggle, isAdmin }: {
               fontFamily: "'Space Grotesk', sans-serif", fontSize: 13,
               fontWeight: isActive ? 600 : 400, letterSpacing: '0.02em',
               cursor: 'pointer', width: '100%', textAlign: 'left', transition: 'all 0.12s', whiteSpace: 'nowrap',
+              minHeight: 44,
             }}
             onMouseEnter={e => { if (!isActive) { e.currentTarget.style.background = hoverBg; e.currentTarget.style.color = textPrimary; } }}
             onMouseLeave={e => { if (!isActive) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = textSecondary; } }}
@@ -116,10 +125,15 @@ function Sidebar({ page, onNav, collapsed, onToggle, isAdmin }: {
   );
 }
 
-function TopBar({ sidebarWidth, onToggleTheme, isMobile, onOpenMenu }: {
+// ── Top bar ───────────────────────────────────────────────────────────────────
+// Desktop-only elements carry className="sharp-desktop" → hidden on mobile.
+// Mobile-only elements carry className="sharp-mobile"   → hidden on desktop.
+// The outer div has className="sharp-topbar" so CSS forces left:0 on mobile,
+// overriding the JS-computed sidebar offset for the first paint.
+
+function TopBar({ sidebarWidth, onToggleTheme, onOpenMenu }: {
   sidebarWidth: number;
   onToggleTheme: () => void;
-  isMobile: boolean;
   onOpenMenu: () => void;
 }) {
   const { theme } = useTheme();
@@ -130,85 +144,85 @@ function TopBar({ sidebarWidth, onToggleTheme, isMobile, onOpenMenu }: {
   const textPrimary = isDark ? '#FFFFFF' : '#111111';
 
   return (
-    <div style={{
-      position: 'fixed', top: 0, left: isMobile ? 0 : sidebarWidth, right: 0, height: 64,
+    // sharp-topbar → left:0 !important on mobile (index.css)
+    <div className="sharp-topbar" style={{
+      position: 'fixed', top: 0, left: sidebarWidth, right: 0, height: 64,
       background: bg, borderBottom: `1px solid ${border}`,
       display: 'flex', alignItems: 'center',
-      padding: isMobile ? '0 16px' : '0 36px',
+      padding: '0 16px',
       zIndex: 99, transition: 'left 0.2s ease',
-      gap: isMobile ? 10 : 14,
+      gap: 10,
     }}>
-      {/* Mobile-only compact logo */}
-      {isMobile && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-          <img src={logoGold} alt="" style={{ width: 24, height: 24, objectFit: 'contain' }} />
-          <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15, color: textPrimary, letterSpacing: '-0.2px' }}>
-            MoneyCrow
-          </span>
-        </div>
-      )}
+      {/* Mobile-only compact logo — hidden on desktop via .sharp-mobile */}
+      <div className="sharp-mobile" style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        <img src={logoGold} alt="" style={{ width: 24, height: 24, objectFit: 'contain' }} />
+        <span style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 15, color: textPrimary, letterSpacing: '-0.2px' }}>
+          MoneyCrow
+        </span>
+      </div>
 
       <div style={{ flex: 1 }} />
 
       {/* Audit badge — desktop only */}
-      {!isMobile && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 12px', border: '1px solid rgba(74,222,128,0.2)', background: 'rgba(74,222,128,0.06)' }}>
-          <span style={{ width: 5, height: 5, background: '#4ADE80' }} />
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#4ADE80', letterSpacing: '0.10em', textTransform: 'uppercase', fontFamily: "'Space Grotesk', sans-serif" }}>Audited</span>
-        </div>
-      )}
+      <div className="sharp-desktop" style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 12px', border: '1px solid rgba(74,222,128,0.2)', background: 'rgba(74,222,128,0.06)' }}>
+        <span style={{ width: 5, height: 5, background: '#4ADE80' }} />
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#4ADE80', letterSpacing: '0.10em', textTransform: 'uppercase', fontFamily: "'Space Grotesk', sans-serif" }}>Audited</span>
+      </div>
 
-      {/* Theme toggle — desktop only (mobile toggle lives in the drawer footer) */}
-      {!isMobile && (
-        <button onClick={onToggleTheme} style={{
-          display: 'flex', alignItems: 'center', border: `1px solid ${border}`,
-          background: 'transparent', cursor: 'pointer', padding: 0, overflow: 'hidden', borderRadius: 0,
-        }}>
-          {(['Dark', 'Light'] as const).map(opt => {
-            const isActive = (opt === 'Dark' && isDark) || (opt === 'Light' && !isDark);
-            return (
-              <span key={opt} style={{
-                padding: '6px 12px', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
-                fontFamily: "'Space Grotesk', sans-serif",
-                background: isActive ? '#F2B705' : 'transparent',
-                color: isActive ? '#111111' : textSecondary,
-                display: 'block',
-              }}>{opt}</span>
-            );
-          })}
-        </button>
-      )}
+      {/* Theme toggle — desktop only */}
+      <button className="sharp-desktop" onClick={onToggleTheme} style={{
+        display: 'flex', alignItems: 'center', border: `1px solid ${border}`,
+        background: 'transparent', cursor: 'pointer', padding: 0, overflow: 'hidden', borderRadius: 0,
+      }}>
+        {(['Dark', 'Light'] as const).map(opt => {
+          const isActive = (opt === 'Dark' && isDark) || (opt === 'Light' && !isDark);
+          return (
+            <span key={opt} style={{
+              padding: '6px 12px', fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+              fontFamily: "'Space Grotesk', sans-serif",
+              background: isActive ? '#F2B705' : 'transparent',
+              color: isActive ? '#111111' : textSecondary,
+              display: 'block',
+            }}>{opt}</span>
+          );
+        })}
+      </button>
 
-      {/* Wallet — RainbowKit handles its own compact/full layout.
-          On mobile the main wallet entry point lives in the drawer footer, so
-          we hide this instance to avoid doubling up in a cramped topbar. */}
-      {!isMobile && <ConnectButton />}
+      {/* Wallet — desktop only (mobile wallet lives in the drawer footer) */}
+      <div className="sharp-desktop" style={{ display: 'flex' }}>
+        <ConnectButton />
+      </div>
 
       {/* Hamburger — mobile only, last element */}
-      {isMobile && (
-        <button
-          onClick={onOpenMenu}
-          aria-label="Open menu"
-          style={{
-            width: 44, height: 44, flexShrink: 0,
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            border: `1px solid ${border}`, background: 'transparent',
-            color: textPrimary, cursor: 'pointer',
-            transition: 'background 0.15s ease',
-          }}
-          onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'; }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <line x1="3" y1="6"  x2="21" y2="6" />
-            <line x1="3" y1="12" x2="21" y2="12" />
-            <line x1="3" y1="18" x2="21" y2="18" />
-          </svg>
-        </button>
-      )}
+      <button
+        className="sharp-mobile"
+        onClick={onOpenMenu}
+        aria-label="Open menu"
+        style={{
+          width: 44, height: 44, flexShrink: 0,
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          border: `1px solid ${border}`, background: 'transparent',
+          color: textPrimary, cursor: 'pointer',
+          transition: 'background 0.15s ease',
+        }}
+        onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'; }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <line x1="3" y1="6"  x2="21" y2="6" />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+      </button>
     </div>
   );
 }
+
+// ── App shell ─────────────────────────────────────────────────────────────────
+// Both <Sidebar> and <MobileNav> are always mounted. CSS media queries do the
+// responsive show/hide on the very first paint — no JavaScript required for
+// correctness. useIsMobile() is still used for the dynamic sidebar-width offset
+// on desktop (a subtle layout detail that degrades gracefully if briefly wrong).
 
 export function AppShell({ page, onNav, children, isAdmin }: {
   page: Page; onNav: (p: Page) => void; children: ReactNode; isAdmin: boolean;
@@ -237,36 +251,42 @@ export function AppShell({ page, onNav, children, isAdmin }: {
     return () => window.removeEventListener('keydown', onKey);
   }, [mobileMenuOpen]);
 
-  // Crossing from mobile→desktop auto-closes the drawer (belt-and-braces;
-  // MobileNav also watches this internally).
+  // Crossing from mobile → desktop auto-closes the drawer.
   useEffect(() => {
     if (!isMobile && mobileMenuOpen) setMobileMenuOpen(false);
   }, [isMobile, mobileMenuOpen]);
 
   return (
     <div style={{ minHeight: '100vh', background: isDark ? '#161616' : '#F2F2ED', fontFamily: "'Space Grotesk', sans-serif", color: isDark ? '#FFFFFF' : '#111111' }}>
-      {isMobile && (
-        <MobileNav
-          open={mobileMenuOpen}
-          onClose={() => setMobileMenuOpen(false)}
-          page={page}
-          onNav={onNav}
-          isAdmin={isAdmin}
-        />
-      )}
+      {/* Mobile nav drawer — always mounted so hamburger works on the very
+          first interaction even before useIsMobile resolves. Invisible on
+          desktop because mobileMenuOpen starts false (translateX(-100%)). */}
+      <MobileNav
+        open={mobileMenuOpen}
+        onClose={() => setMobileMenuOpen(false)}
+        page={page}
+        onNav={onNav}
+        isAdmin={isAdmin}
+      />
 
-      {!isMobile && (
-        <Sidebar page={page} onNav={onNav} collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} isAdmin={isAdmin} />
-      )}
+      {/* Desktop sidebar — always mounted; CSS hides it on mobile.
+          See .sharp-sidebar in index.css. */}
+      <Sidebar
+        page={page}
+        onNav={onNav}
+        collapsed={collapsed}
+        onToggle={() => setCollapsed(c => !c)}
+        isAdmin={isAdmin}
+      />
 
       <TopBar
         sidebarWidth={sw}
         onToggleTheme={toggleTheme}
-        isMobile={isMobile}
         onOpenMenu={() => setMobileMenuOpen(true)}
       />
 
-      <main style={{
+      {/* sharp-main → margin-left:0 !important and mobile padding on <1024px */}
+      <main className="sharp-main" style={{
         marginLeft: isMobile ? 0 : sw,
         marginTop: 64,
         minHeight: 'calc(100vh - 64px)',
