@@ -261,10 +261,6 @@ export function AppShell({ page, onNav, children, isAdmin }: {
     if (!isMobile && mobileMenuOpen) setMobileMenuOpen(false);
   }, [isMobile, mobileMenuOpen]);
 
-  // Sidebar collapse changes its width; update the CSS custom property so the
-  // topbar and main track it on desktop without breaking mobile layout.
-  const sw = collapsed ? 56 : 232;
-
   return (
     <div
       style={{ minHeight: '100vh', background: isDark ? '#161616' : '#F2F2ED', fontFamily: "'Space Grotesk', sans-serif", color: isDark ? '#FFFFFF' : '#111111' }}

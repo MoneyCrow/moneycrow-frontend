@@ -348,7 +348,7 @@ function DemoPanel({ address: adminAddr, chain }: { address: `0x${string}`; chai
   useEffect(() => { if (createSuccess) { refetchDemo(); } }, [createSuccess, refetchDemo]);
 
   const handleCreate = async () => {
-    if (!canCreate || !demoAddr || !address) return;
+    if (!canCreate || !demoAddr || !adminAddr) return;
     resetCreate();
     setCreateErrorMsg('');
     // Abort if registration fails — proceeding without it means no notifications
@@ -360,7 +360,7 @@ function DemoPanel({ address: adminAddr, chain }: { address: `0x${string}`; chai
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
-          depositorAddress:  address,
+          depositorAddress:  adminAddr,
           chainId:           chain.id,
           depositorEmail,
           depositorTelegram,

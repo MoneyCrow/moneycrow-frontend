@@ -155,7 +155,7 @@ export default function ClaimPage({ initialDepositor = '' }: Props) {
 
             <div style={{ border: `1px solid ${border}`, marginBottom: 20 }}>
               {([
-                ['Description',  `"${escrow.description}"`],
+                ['Terms Hash',   escrow.termsHash.slice(0, 18) + '…'],
                 ['Gross Amount', formatAmt(gross)],
                 ['Fee',          feeText],
                 ['Fee Amount',   feeAmt > 0n ? `− ${formatAmt(feeAmt)}` : 'none'],
