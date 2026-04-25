@@ -69,6 +69,8 @@ function AcceptEscrowPanel({
   const { writeContract, data: acceptHash, isPending: writePending, error: writeError } = useWriteContract();
   const { isLoading: acceptConfirming, isSuccess: acceptDone } = useWaitForTransactionReceipt({ hash: acceptHash });
 
+  const [verifyToken, setVerifyToken] = useState('');
+
   useEffect(() => {
     if (signature && !writePending && !acceptHash) {
       writeContract({
@@ -77,6 +79,22 @@ function AcceptEscrowPanel({
       });
     }
   }, [signature]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // After the recipient accepts on-chain, register a Telegram verification
+  // token so they can complete the bot /start flow and receive the
+  // ReleaseApproved / Refunded notifications. The username sent here is just
+  // a placeholder — bot poller binds whatever Telegram account taps /start.
+  useEffect(() => {
+    if (!acceptDone) return;
+    const token   = crypto.randomUUID();
+    const apiBase = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001';
+    fetch(`${apiBase}/telegram/verify`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ token, username: escrow.recipient }),
+    }).catch(() => {});
+    setVerifyToken(token);
+  }, [acceptDone, escrow.recipient]);
 
   const handleSign = () => {
     signTypedData({
@@ -98,7 +116,31 @@ function AcceptEscrowPanel({
   }
 
   if (acceptDone) {
-    return <div className="alert alert-success" style={{ marginTop: 16 }}>Escrow accepted — status is now <b>Active</b>. Admin will review and approve release.</div>;
+    return (
+      <div style={{ marginTop: 16 }}>
+        <div className="alert alert-success">Escrow accepted — status is now <b>Active</b>. Admin will review and approve release.</div>
+        {verifyToken && (
+          <button
+            type="button"
+            onClick={() => {
+              window.open(
+                `https://t.me/escrow_notifier_bot?start=verify_${verifyToken}`,
+                '_blank',
+                'noopener,noreferrer',
+              );
+              setVerifyToken('');
+            }}
+            style={{
+              display: 'block', width: '100%', marginTop: 12, padding: '10px 14px', textAlign: 'left',
+              background: 'rgba(242,183,5,0.07)', border: '1px solid rgba(242,183,5,0.35)',
+              cursor: 'pointer', fontFamily: "'Space Grotesk', sans-serif", fontSize: 13, color: '#F2B705', lineHeight: 1.5,
+            }}
+          >
+            Tap here to verify your Telegram and receive release / refund notifications
+          </button>
+        )}
+      </div>
+    );
   }
 
   const busy = signPending || writePending || acceptConfirming;

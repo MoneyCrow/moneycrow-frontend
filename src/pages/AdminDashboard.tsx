@@ -318,6 +318,7 @@ function DemoPanel({ address: adminAddr, chain }: { address: `0x${string}`; chai
   const [depositorEmail,    setDepositorEmail]     = useState('');
   const [depositorTelegram, setDepositorTelegram]  = useState('');
   const [createErrorMsg,    setCreateErrorMsg]     = useState('');
+  const [verifyToken,       setVerifyToken]        = useState('');
 
   useEffect(() => { setSelectedTokenIdx(0); setCustomToken(''); setShowCustom(false); }, [chain.id]);
 
@@ -345,7 +346,25 @@ function DemoPanel({ address: adminAddr, chain }: { address: `0x${string}`; chai
   const { writeContract: writeCreate, data: createHash, isPending: createPending, error: createError, reset: resetCreate } = useWriteContract();
   const { isLoading: createConfirming, isSuccess: createSuccess } = useWaitForTransactionReceipt({ hash: createHash });
 
-  useEffect(() => { if (createSuccess) { refetchDemo(); } }, [createSuccess, refetchDemo]);
+  useEffect(() => {
+    if (!createSuccess) return;
+    refetchDemo();
+    // After the on-chain create confirms, register a Telegram verification
+    // token for the depositor (admin) so they can complete the bot /start
+    // flow and start receiving DemoAccepted notifications. Without this,
+    // their @handle has no chat_id binding and the listener silently skips.
+    if (depositorTelegram.trim()) {
+      const token   = crypto.randomUUID();
+      const handle  = depositorTelegram.trim();
+      const apiBase = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001';
+      fetch(`${apiBase}/telegram/verify`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ token, username: handle }),
+      }).catch(() => {});
+      setVerifyToken(token);
+    }
+  }, [createSuccess]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCreate = async () => {
     if (!canCreate || !demoAddr || !adminAddr) return;
@@ -525,6 +544,27 @@ function DemoPanel({ address: adminAddr, chain }: { address: `0x${string}`; chai
           >
             {createPending ? 'Awaiting signature...' : createConfirming ? 'Mining...' : 'Create Demo'}
           </SharpButton>
+        )}
+
+        {verifyToken && (
+          <button
+            type="button"
+            onClick={() => {
+              window.open(
+                `https://t.me/escrow_notifier_bot?start=verify_${verifyToken}`,
+                '_blank',
+                'noopener,noreferrer',
+              );
+              setVerifyToken('');
+            }}
+            style={{
+              display: 'block', width: '100%', marginTop: 12, padding: '10px 14px', textAlign: 'left',
+              background: 'rgba(242,183,5,0.07)', border: '1px solid rgba(242,183,5,0.35)',
+              cursor: 'pointer', fontFamily: "'Space Grotesk', sans-serif", fontSize: 13, color: '#F2B705', lineHeight: 1.5,
+            }}
+          >
+            Demo created — tap here to verify your Telegram and receive notifications
+          </button>
         )}
 
         {createErrorMsg && <div className="alert alert-error" style={{ marginTop: 12 }}>{createErrorMsg}</div>}

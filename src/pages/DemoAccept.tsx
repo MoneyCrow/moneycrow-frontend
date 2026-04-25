@@ -43,6 +43,7 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
   const [queryAddr, setQueryAddr]           = useState(initialDepositor);
   const [sig, setSig]                       = useState<`0x${string}` | null>(null);
   const [demoDescription, setDemoDescription] = useState('');
+  const [verifyToken, setVerifyToken]       = useState('');
 
   const isValidAddr = (a: string) => a.length === 42 && a.startsWith('0x');
 
@@ -111,6 +112,23 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
 
   const { writeContract, data: txHash, isPending: isTxPending, error: txError, reset: resetTx } = useWriteContract();
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash: txHash });
+
+  // After the recipient accepts on-chain, give them a one-tap path to verify
+  // their Telegram so they receive the DemoApproved notification. The username
+  // sent here is a placeholder — the bot poller binds whatever Telegram
+  // account taps /start, so as long as the admin typed the recipient's real
+  // TG handle on Create, the binding will land on the correct username.
+  useEffect(() => {
+    if (!isSuccess || !address) return;
+    const token   = crypto.randomUUID();
+    const apiBase = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001';
+    fetch(`${apiBase}/telegram/verify`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ token, username: address }),
+    }).catch(() => {});
+    setVerifyToken(token);
+  }, [isSuccess, address]);
 
   const handleAccept = () => {
     if (!sig || !demoAddr) return;
@@ -271,6 +289,27 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
             <p style={{ fontSize: 12, color: textTertiary, lineHeight: 1.6 }}>
               The admin will call approveDemo() to finish the simulation. You'll receive a notification when it's done.
             </p>
+
+            {verifyToken && (
+              <button
+                type="button"
+                onClick={() => {
+                  window.open(
+                    `https://t.me/escrow_notifier_bot?start=verify_${verifyToken}`,
+                    '_blank',
+                    'noopener,noreferrer',
+                  );
+                  setVerifyToken('');
+                }}
+                style={{
+                  display: 'block', width: '100%', marginTop: 16, padding: '10px 14px', textAlign: 'left',
+                  background: 'rgba(242,183,5,0.07)', border: '1px solid rgba(242,183,5,0.35)',
+                  cursor: 'pointer', fontFamily: "'Space Grotesk', sans-serif", fontSize: 13, color: '#F2B705', lineHeight: 1.5,
+                }}
+              >
+                Tap here to verify your Telegram and receive the approval notification
+              </button>
+            )}
           </div>
         )}
       </SharpCard>
