@@ -34,9 +34,13 @@ html[data-theme="light"] {
   --step-inactive: #E5E5E0;
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
-
+/* Global reset must live inside @layer base so Tailwind's @layer utilities
+   can override it. Unlayered rules outrank ALL layered rules in the CSS
+   cascade — that bug previously caused lg:ml-[232px] on <main> to lose to
+   the wildcard `* { margin: 0 }`, leaving the desktop sidebar overlapping
+   the page content. Keep this in @layer base. */
 @layer base {
+  * { box-sizing: border-box; margin: 0; padding: 0; }
   *, *::before, *::after { border-radius: 0 !important; }
 }
 
