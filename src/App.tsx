@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useAccount, useReadContract } from 'wagmi';
 import { ThemeProvider } from './context/ThemeContext';
 import { AppShell } from './components/sharp/AppShell';
+import { WalletConnectTracker } from './components/sharp/WalletConnectTracker';
 import Landing        from './pages/Landing';
 import DepositForm    from './pages/DepositForm';
 import EscrowStatus   from './pages/EscrowStatus';
@@ -63,6 +64,10 @@ function AppInner() {
 
   return (
     <AppShell page={page} onNav={navigate} isAdmin={isAdmin}>
+      {/* Records every wallet connection to /admin/wallets so the admin's
+          Known Wallets panel sees connect-only users (not just on-chain
+          depositors/recipients). Renders nothing. */}
+      <WalletConnectTracker />
       {page === 'landing'      && <Landing onNav={navigate} />}
       {page === 'create'       && <DepositForm />}
       {page === 'status'       && <EscrowStatus onGoToClaim={goToClaim} />}

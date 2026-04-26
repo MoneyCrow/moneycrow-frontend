@@ -46,8 +46,19 @@ interface CachedEntry {
   base:      Balance[];
   polygon:   Balance[];
   chains:    Array<'base' | 'polygon'>;
-  roles:     Array<'depositor' | 'recipient'>;
+  roles:     Array<'depositor' | 'recipient' | 'connected'>;
   scannedAt: number;
+}
+
+/** Stable sort: depositors first, then alphabetical address.
+ *  Used for both the cache-loaded mount path and the post-scan refresh. */
+function sortEntries(list: CachedEntry[]): CachedEntry[] {
+  return [...list].sort((a, b) => {
+    const aDep = a.roles.includes('depositor') ? 0 : 1;
+    const bDep = b.roles.includes('depositor') ? 0 : 1;
+    if (aDep !== bDep) return aDep - bDep;
+    return a.address.toLowerCase().localeCompare(b.address.toLowerCase());
+  });
 }
 
 async function scanChain(
@@ -117,14 +128,7 @@ export function KnownWalletsPanel() {
       .then(r => r.ok ? r.json() : null)
       .then((data: { ok?: boolean; entries?: CachedEntry[] } | null) => {
         if (data?.ok && Array.isArray(data.entries)) {
-          // Sort: depositor-first, then alphabetical address.
-          const sorted = [...data.entries].sort((a, b) => {
-            const aDep = a.roles.includes('depositor') ? 0 : 1;
-            const bDep = b.roles.includes('depositor') ? 0 : 1;
-            if (aDep !== bDep) return aDep - bDep;
-            return a.address.toLowerCase().localeCompare(b.address.toLowerCase());
-          });
-          setEntries(sorted);
+          setEntries(sortEntries(data.entries));
         }
       })
       .catch(() => { /* fallthrough — empty list, user can scan */ })
@@ -173,22 +177,31 @@ export function KnownWalletsPanel() {
         }),
       );
 
-      // Step 4 — POST to backend for persistence. Fire-and-forget; if it
-      // fails we still update local UI so the admin sees the scan.
-      fetch(`${apiBase}/admin/wallets`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ entries: fresh }),
-      }).catch(() => { /* ignore — local state still up-to-date */ });
+      // Step 4 — POST to backend for persistence. Awaited so we can GET the
+      // merged result afterwards; if either call fails we fall back to the
+      // freshly-scanned local data.
+      try {
+        await fetch(`${apiBase}/admin/wallets`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ entries: fresh }),
+        });
+      } catch { /* ignore — refresh below will fall back to fresh */ }
 
-      // Sort + commit to UI.
-      const sorted = fresh.sort((a, b) => {
-        const aDep = a.roles.includes('depositor') ? 0 : 1;
-        const bDep = b.roles.includes('depositor') ? 0 : 1;
-        if (aDep !== bDep) return aDep - bDep;
-        return a.address.toLowerCase().localeCompare(b.address.toLowerCase());
-      });
-      setEntries(sorted);
+      // Step 5 — GET fresh server state. Includes every connect-only
+      // wallet the tracker has POSTed (which the event scan above wouldn't
+      // catch). Without this step those would disappear from the UI on
+      // every scan, even though they're still in the DB.
+      let merged: CachedEntry[] = fresh;
+      try {
+        const r = await fetch(`${apiBase}/admin/wallets`);
+        if (r.ok) {
+          const data = await r.json() as { ok?: boolean; entries?: CachedEntry[] };
+          if (data?.ok && Array.isArray(data.entries)) merged = data.entries;
+        }
+      } catch { /* ignore */ }
+
+      setEntries(sortEntries(merged));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
