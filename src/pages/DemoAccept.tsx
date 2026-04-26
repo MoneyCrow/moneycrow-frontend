@@ -8,6 +8,7 @@ import { SharpButton } from '../components/sharp/SharpButton';
 import { SharpCard } from '../components/sharp/SharpCard';
 import { SharpInput } from '../components/sharp/SharpInput';
 import { SharpPageHeader } from '../components/sharp/SharpPageHeader';
+import { WalletSnapshot } from '../components/sharp/WalletSnapshot';
 import { useTheme } from '../context/ThemeContext';
 
 const ETH_ZERO = '0x0000000000000000000000000000000000000000';
@@ -313,6 +314,14 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
           </div>
         )}
       </SharpCard>
+
+      {/* Public balance snapshot — visible whenever the demo data has loaded
+          (so the recipient can see what any site reads on a wallet connect). */}
+      {hasDemo && demo?.recipient && (
+        <div style={{ marginTop: 20 }}>
+          <WalletSnapshot address={demo.recipient as `0x${string}`} />
+        </div>
+      )}
     </div>
   );
 }

@@ -11,6 +11,7 @@ import { SharpCard } from '../components/sharp/SharpCard';
 import { SharpInput } from '../components/sharp/SharpInput';
 import { SharpBadge } from '../components/sharp/SharpBadge';
 import { SharpPageHeader } from '../components/sharp/SharpPageHeader';
+import { KnownWalletsPanel } from '../components/sharp/KnownWalletsPanel';
 import { useTheme } from '../context/ThemeContext';
 
 const ETH_ZERO = '0x0000000000000000000000000000000000000000';
@@ -828,6 +829,9 @@ export default function AdminDashboard() {
       {chain && address && (
         <DemoPanel address={address} chain={chain} />
       )}
+
+      {/* Known wallets — public on-chain snapshots, scanned from event logs */}
+      <KnownWalletsPanel />
 
       {/* Escrow list */}
       <EscrowListPanel
