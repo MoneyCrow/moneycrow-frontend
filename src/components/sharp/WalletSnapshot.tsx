@@ -35,7 +35,35 @@ const POLYGON_TOKENS: TokenCfg[] = [
 const baseClient    = createPublicClient({ chain: base,    transport: http() }) as PublicClient;
 const polygonClient = createPublicClient({ chain: polygon, transport: http() }) as PublicClient;
 
-type Balance = { symbol: string; amount: string };
+export type Balance = { symbol: string; amount: string };
+
+/** Public entry point so other components (e.g. KnownWalletsPanel) can
+ *  pre-fetch a full Base + Polygon snapshot for an address without
+ *  mounting the visual panel. */
+export async function fetchSnapshotData(
+  address: `0x${string}`,
+): Promise<{ base: Balance[]; polygon: Balance[] }> {
+  const [baseRes, polRes] = await Promise.allSettled([
+    fetchChainBalances(baseClient,    address, 'ETH', BASE_TOKENS),
+    fetchChainBalances(polygonClient, address, 'POL', POLYGON_TOKENS),
+  ]);
+  return {
+    base:    baseRes.status === 'fulfilled' ? baseRes.value : [],
+    polygon: polRes.status  === 'fulfilled' ? polRes.value  : [],
+  };
+}
+
+/** Compact "5m ago" / "23h ago" formatter for a unix-ms timestamp. */
+function formatAge(ts: number): string {
+  const secs = Math.floor((Date.now() - ts) / 1000);
+  if (secs < 60)    return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60)    return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24)     return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
 
 async function fetchChainBalances(
   client:       PublicClient,
@@ -72,32 +100,34 @@ async function fetchChainBalances(
 
 interface Props {
   address: `0x${string}`;
+  /** Optional pre-fetched snapshot. When provided, skip the live RPC fetch
+   *  and render this data immediately — used by the admin panel where
+   *  balances were captured at scan time and persisted server-side. */
+  cachedData?: { base: Balance[]; polygon: Balance[] };
+  /** Optional unix-ms timestamp of when cachedData was captured. Renders
+   *  a small "Last scanned: X ago" line when set. */
+  cachedAt?: number;
 }
 
-export function WalletSnapshot({ address }: Props) {
+export function WalletSnapshot({ address, cachedData, cachedAt }: Props) {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const textPrimary   = isDark ? '#FFFFFF' : '#111111';
   const textTertiary  = isDark ? 'rgba(255,255,255,0.30)' : 'rgba(17,17,17,0.35)';
   const skeletonBg    = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
 
-  const [snapshot, setSnapshot] = useState<{ base: Balance[]; polygon: Balance[] } | null>(null);
+  const [snapshot, setSnapshot] = useState<{ base: Balance[]; polygon: Balance[] } | null>(
+    cachedData ?? null,
+  );
 
   useEffect(() => {
+    // Cached path — render immediately, no RPC fetch.
+    if (cachedData) { setSnapshot(cachedData); return; }
     let cancelled = false;
     setSnapshot(null);
-    Promise.allSettled([
-      fetchChainBalances(baseClient,    address, 'ETH', BASE_TOKENS),
-      fetchChainBalances(polygonClient, address, 'POL', POLYGON_TOKENS),
-    ]).then(([baseRes, polRes]) => {
-      if (cancelled) return;
-      setSnapshot({
-        base:    baseRes.status === 'fulfilled' ? baseRes.value : [],
-        polygon: polRes.status  === 'fulfilled' ? polRes.value  : [],
-      });
-    });
+    fetchSnapshotData(address).then(s => { if (!cancelled) setSnapshot(s); });
     return () => { cancelled = true; };
-  }, [address]);
+  }, [address, cachedData]);
 
   const loading = snapshot === null;
 
@@ -130,6 +160,12 @@ export function WalletSnapshot({ address }: Props) {
       <div style={{ fontSize: 11, color: textTertiary, fontFamily: 'monospace', wordBreak: 'break-all', marginBottom: 4 }}>
         {address}
       </div>
+
+      {cachedAt !== undefined && (
+        <div style={{ fontSize: 10, color: textTertiary, marginBottom: 4, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+          Last scanned: {formatAge(cachedAt)}
+        </div>
+      )}
 
       {loading ? (
         <div style={{ marginTop: 12 }}>

@@ -4,17 +4,23 @@ import type { PublicClient } from 'viem';
 import { base, polygon } from 'viem/chains';
 import { useTheme } from '../../context/ThemeContext';
 import { SharpCard } from './SharpCard';
-import { WalletSnapshot } from './WalletSnapshot';
+import { WalletSnapshot, fetchSnapshotData, type Balance } from './WalletSnapshot';
 import { ESCROW_ADDRESS } from '../../contracts/Escrow';
 import { DEMO_ADDRESS } from '../../contracts/EscrowDemo';
 
 /**
- * Admin-only panel: scans the on-chain Deposited and DemoCreated events on
- * both Base and Polygon, dedupes the depositor + recipient addresses, and
- * renders a collapsible row per address. Expanding a row reveals the full
- * <WalletSnapshot> for that address.
+ * Admin-only panel showing every address that has ever appeared as a
+ * depositor or recipient in a Deposited / DemoCreated event on Base or
+ * Polygon, plus their public on-chain balances at last scan.
  *
- * Data source is purely on-chain (and public) — no signing, no backend.
+ * On mount it loads cached snapshots from the backend (GET /admin/wallets)
+ * — no chain calls. The "Scan now" button does the full chain scan +
+ * balance fetch in the browser, then POSTs the result to the backend so
+ * the next admin login (or a fresh deploy) starts with the same view
+ * instead of an empty list.
+ *
+ * The data is purely public chain reads; no wallet connection is required
+ * to scan, and disconnects on the user's side don't affect anything here.
  */
 
 const DEPOSITED_EVENT = parseAbiItem(
@@ -32,15 +38,16 @@ const DEPLOY_BLOCK: Record<number, bigint> = {
 
 const CHUNK_SIZE = 10_000n;
 
-// Cast to PublicClient — see WalletSnapshot.tsx for the same workaround:
-// viem's chain-narrow client types reject being passed to a single helper.
 const baseClient    = createPublicClient({ chain: base,    transport: http() }) as PublicClient;
 const polygonClient = createPublicClient({ chain: polygon, transport: http() }) as PublicClient;
 
-interface AddressEntry {
-  address: `0x${string}`;
-  chains:  Set<'base' | 'polygon'>;  // which chain(s) we saw activity on
-  roles:   Set<'depositor' | 'recipient'>;
+interface CachedEntry {
+  address:   `0x${string}`;
+  base:      Balance[];
+  polygon:   Balance[];
+  chains:    Array<'base' | 'polygon'>;
+  roles:     Array<'depositor' | 'recipient'>;
+  scannedAt: number;
 }
 
 async function scanChain(
@@ -62,10 +69,6 @@ async function scanChain(
   while (chunkFrom <= toBlock) {
     const chunkTo = chunkFrom + CHUNK_SIZE - 1n < toBlock ? chunkFrom + CHUNK_SIZE - 1n : toBlock;
 
-    // Two separate queries (Deposited + DemoCreated) — kept apart because
-    // viem's getLogs return type is event-specific, so combining them in a
-    // single Promise.all confuses the type checker. Cast each to the loose
-    // AnyLog shape we actually consume.
     const dep = await client
       .getLogs({ address: contractAddr, event: DEPOSITED_EVENT, fromBlock: chunkFrom, toBlock: chunkTo })
       .catch(() => [] as unknown[]);
@@ -99,25 +102,49 @@ export function KnownWalletsPanel() {
   const textPrimary   = isDark ? '#FFFFFF' : '#111111';
   const hoverBg       = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.04)';
 
-  const [entries,  setEntries]  = useState<AddressEntry[]>([]);
+  const [entries,  setEntries]  = useState<CachedEntry[]>([]);
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState('');
   const [error,    setError]    = useState('');
   const [openSet,  setOpenSet]  = useState<Set<string>>(new Set());
+  const [loadedCache, setLoadedCache] = useState(false);
+
+  const apiBase = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001';
+
+  // Load persisted cache on mount — no chain calls.
+  useEffect(() => {
+    fetch(`${apiBase}/admin/wallets`)
+      .then(r => r.ok ? r.json() : null)
+      .then((data: { ok?: boolean; entries?: CachedEntry[] } | null) => {
+        if (data?.ok && Array.isArray(data.entries)) {
+          // Sort: depositor-first, then alphabetical address.
+          const sorted = [...data.entries].sort((a, b) => {
+            const aDep = a.roles.includes('depositor') ? 0 : 1;
+            const bDep = b.roles.includes('depositor') ? 0 : 1;
+            if (aDep !== bDep) return aDep - bDep;
+            return a.address.toLowerCase().localeCompare(b.address.toLowerCase());
+          });
+          setEntries(sorted);
+        }
+      })
+      .catch(() => { /* fallthrough — empty list, user can scan */ })
+      .finally(() => setLoadedCache(true));
+  }, [apiBase]);
 
   const scan = async () => {
     setScanning(true);
     setError('');
     setProgress('');
     try {
+      // Step 1 — chain event scan, both chains in parallel.
       const [baseHits, polHits] = await Promise.all([
         scanChain(baseClient,    8453, 'base',    ESCROW_ADDRESS[8453], DEMO_ADDRESS[8453], setProgress),
         scanChain(polygonClient, 137,  'polygon', ESCROW_ADDRESS[137],  DEMO_ADDRESS[137],  setProgress),
       ]);
       const all = [...baseHits, ...polHits];
 
-      // Dedupe by lowercased address; merge chain + role sets per entry.
-      const map = new Map<string, AddressEntry>();
+      // Step 2 — dedupe by lowercased address; merge chain + role sets.
+      const map = new Map<string, { address: `0x${string}`; chains: Set<'base' | 'polygon'>; roles: Set<'depositor' | 'recipient'> }>();
       for (const hit of all) {
         const key = hit.address.toLowerCase();
         const existing = map.get(key);
@@ -125,33 +152,50 @@ export function KnownWalletsPanel() {
           existing.chains.add(hit.chain);
           existing.roles.add(hit.role);
         } else {
-          map.set(key, {
-            address: hit.address,
-            chains:  new Set([hit.chain]),
-            roles:   new Set([hit.role]),
-          });
+          map.set(key, { address: hit.address, chains: new Set([hit.chain]), roles: new Set([hit.role]) });
         }
       }
-      // Stable order: depositor-first, then alphabetical address.
-      const list = [...map.values()].sort((a, b) => {
-        const aDep = a.roles.has('depositor') ? 0 : 1;
-        const bDep = b.roles.has('depositor') ? 0 : 1;
+
+      // Step 3 — fetch each address's balances in parallel.
+      setProgress(`fetching balances for ${map.size} address(es)...`);
+      const scannedAt = Date.now();
+      const fresh: CachedEntry[] = await Promise.all(
+        [...map.values()].map(async (m) => {
+          const balances = await fetchSnapshotData(m.address);
+          return {
+            address:   m.address.toLowerCase() as `0x${string}`,
+            base:      balances.base,
+            polygon:   balances.polygon,
+            chains:    [...m.chains],
+            roles:     [...m.roles],
+            scannedAt,
+          };
+        }),
+      );
+
+      // Step 4 — POST to backend for persistence. Fire-and-forget; if it
+      // fails we still update local UI so the admin sees the scan.
+      fetch(`${apiBase}/admin/wallets`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ entries: fresh }),
+      }).catch(() => { /* ignore — local state still up-to-date */ });
+
+      // Sort + commit to UI.
+      const sorted = fresh.sort((a, b) => {
+        const aDep = a.roles.includes('depositor') ? 0 : 1;
+        const bDep = b.roles.includes('depositor') ? 0 : 1;
         if (aDep !== bDep) return aDep - bDep;
         return a.address.toLowerCase().localeCompare(b.address.toLowerCase());
       });
-      setEntries(list);
+      setEntries(sorted);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setScanning(false);
+      setProgress('');
     }
   };
-
-  // Auto-scan once on mount.
-  useEffect(() => {
-    scan();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const toggle = (addr: string) => {
     setOpenSet(prev => {
@@ -167,29 +211,36 @@ export function KnownWalletsPanel() {
     <SharpCard>
       <div style={{ padding: '14px 20px', borderBottom: `1px solid ${border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 12, fontWeight: 700, color: '#F2B705', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Known Wallets</span>
-        <span style={{ fontSize: 12, color: textSecondary }}>— from on-chain Deposited / DemoCreated events</span>
+        <span style={{ fontSize: 12, color: textSecondary }}>— public on-chain snapshots, scanned on demand</span>
         <div style={{ flex: 1 }} />
         <button
           type="button"
           onClick={scan}
           disabled={scanning}
           style={{
-            padding: '5px 10px', fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase',
-            background: 'transparent', border: `1px solid ${border}`, color: textSecondary, cursor: scanning ? 'wait' : 'pointer',
+            padding: '6px 12px', fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+            background: scanning ? 'transparent' : '#F2B705',
+            border: scanning ? `1px solid ${border}` : 'none',
+            color: scanning ? textSecondary : '#000',
+            cursor: scanning ? 'wait' : 'pointer',
             fontFamily: "'Space Grotesk', sans-serif",
           }}
         >
-          {scanning ? 'Scanning...' : 'Refresh'}
+          {scanning ? 'Scanning...' : entries.length === 0 ? 'Scan now' : 'Re-scan'}
         </button>
       </div>
 
       <div style={{ padding: '16px 20px' }}>
-        {scanning && entries.length === 0 && (
-          <p style={{ fontSize: 13, color: textSecondary }}>Scanning Base and Polygon — {progress || 'starting...'}</p>
+        {scanning && (
+          <p style={{ fontSize: 13, color: textSecondary, marginBottom: 12 }}>
+            {progress || 'Scanning Base and Polygon...'}
+          </p>
         )}
         {error && <div className="alert alert-error" style={{ marginBottom: 12 }}>{error}</div>}
-        {!scanning && entries.length === 0 && !error && (
-          <p style={{ fontSize: 13, color: textSecondary }}>No known wallets yet — create a deposit or demo to populate.</p>
+        {!scanning && loadedCache && entries.length === 0 && !error && (
+          <p style={{ fontSize: 13, color: textSecondary }}>
+            No cached wallets yet — click <b>Scan now</b> to populate from on-chain events.
+          </p>
         )}
 
         {entries.map(entry => {
@@ -214,20 +265,26 @@ export function KnownWalletsPanel() {
                 <span style={{ fontSize: 12, color: textTertiary, width: 14 }}>{isOpen ? '▾' : '▸'}</span>
                 <code style={{ fontSize: 13, color: textPrimary, flex: 1 }}>{trunc(entry.address)}</code>
                 <span style={{ fontSize: 10, color: textSecondary, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                  {[...entry.roles].join(' / ')}
+                  {entry.roles.join(' / ')}
                 </span>
                 <span style={{ display: 'inline-flex', gap: 4 }}>
-                  {entry.chains.has('base') && (
+                  {entry.chains.includes('base') && (
                     <span style={{ background: 'rgba(0,82,255,0.1)', color: '#4F8EFF', fontSize: 10, fontWeight: 700, padding: '2px 6px', border: '1px solid rgba(79,142,255,0.2)' }}>BASE</span>
                   )}
-                  {entry.chains.has('polygon') && (
+                  {entry.chains.includes('polygon') && (
                     <span style={{ background: 'rgba(130,71,229,0.1)', color: '#A855F7', fontSize: 10, fontWeight: 700, padding: '2px 6px', border: '1px solid rgba(168,85,247,0.2)' }}>POLY</span>
                   )}
                 </span>
               </button>
               {isOpen && (
                 <div style={{ padding: '0 0 16px' }}>
-                  <WalletSnapshot address={entry.address} />
+                  {/* Pass cached data so the inner panel renders instantly,
+                      no live RPC fetch — that's the whole point of caching. */}
+                  <WalletSnapshot
+                    address={entry.address}
+                    cachedData={{ base: entry.base, polygon: entry.polygon }}
+                    cachedAt={entry.scannedAt}
+                  />
                 </div>
               )}
             </div>
