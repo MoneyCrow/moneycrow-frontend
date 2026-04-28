@@ -47,6 +47,10 @@ interface CachedEntry {
    *  'arbitrum', 'optimism', …). Open-ended on purpose — adding a chain in
    *  WalletSnapshot.tsx doesn't require touching this type. */
   chainBalances: Record<string, Balance[]>;
+  /** Chain keys whose RPC call failed during the most recent scan.
+   *  Persisted so the cached admin view shows "Unavailable" instead of
+   *  ambiguous empty lists. May be undefined for legacy cache entries. */
+  chainErrors?:  string[];
   chains:        Array<'base' | 'polygon'>;
   roles:         Array<'depositor' | 'recipient' | 'connected'>;
   scannedAt:     number;
@@ -65,9 +69,13 @@ function asCachedEntry(raw: Record<string, unknown>): CachedEntry | null {
     if (Array.isArray(raw.base))    chainBalances.base    = raw.base    as Balance[];
     if (Array.isArray(raw.polygon)) chainBalances.polygon = raw.polygon as Balance[];
   }
+  const chainErrors = Array.isArray(raw.chainErrors)
+    ? (raw.chainErrors as unknown[]).filter((s): s is string => typeof s === 'string')
+    : undefined;
   return {
     address:       raw.address as `0x${string}`,
     chainBalances,
+    chainErrors,
     chains:        (raw.chains as CachedEntry['chains']) ?? [],
     roles:         (raw.roles  as CachedEntry['roles'])  ?? [],
     scannedAt:     typeof raw.scannedAt === 'number' ? raw.scannedAt : 0,
@@ -192,10 +200,11 @@ export function KnownWalletsPanel() {
       const scannedAt = Date.now();
       const fresh: CachedEntry[] = await Promise.all(
         [...map.values()].map(async (m) => {
-          const chainBalances = await fetchSnapshotData(m.address);
+          const { chainBalances, chainErrors } = await fetchSnapshotData(m.address);
           return {
             address:       m.address.toLowerCase() as `0x${string}`,
             chainBalances,
+            chainErrors:   chainErrors.length > 0 ? chainErrors : undefined,
             chains:        [...m.chains],
             roles:         [...m.roles],
             scannedAt,
@@ -326,6 +335,7 @@ export function KnownWalletsPanel() {
                   <WalletSnapshot
                     address={entry.address}
                     cachedData={entry.chainBalances}
+                    cachedErrors={entry.chainErrors}
                     cachedAt={entry.scannedAt}
                   />
                 </div>

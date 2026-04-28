@@ -110,17 +110,36 @@ const ALCHEMY_KEY: string = (import.meta.env.VITE_ALCHEMY_API_KEY as string | un
 
 interface RpcResponse<T> { result?: T; error?: { message: string } }
 
+/** Sentinel thrown by alchemyCall on transport / 4xx / 5xx failure so the
+ *  caller can record a per-chain error instead of silently treating it as
+ *  "no balances". The message is opportunistically pulled from the response
+ *  body when available — Alchemy's 403s carry an explanation. */
+class AlchemyError extends Error {}
+
 async function alchemyCall<T>(url: string, method: string, params: unknown[]): Promise<T | null> {
+  let res: Response;
   try {
-    const res = await fetch(url, {
+    res = await fetch(url, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
     });
-    if (!res.ok) return null;
-    const body = await res.json() as RpcResponse<T>;
-    return body.result ?? null;
-  } catch { return null; }
+  } catch (err) {
+    throw new AlchemyError(`network error: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const text = await res.text();
+      if (text) detail = `HTTP ${res.status} — ${text.slice(0, 240)}`;
+    } catch { /* ignore */ }
+    throw new AlchemyError(detail);
+  }
+  let body: RpcResponse<T>;
+  try { body = await res.json() as RpcResponse<T>; }
+  catch { throw new AlchemyError('non-JSON response'); }
+  if (body.error) throw new AlchemyError(body.error.message ?? 'rpc error');
+  return body.result ?? null;
 }
 
 /** Heuristic to drop airdrop/dust spam tokens from the visible list.
@@ -164,11 +183,17 @@ async function fetchChainBalancesAlchemy(
     try { return BigInt(t.tokenBalance) > 0n; } catch { return false; }
   });
 
-  const metas = await Promise.all(
+  // allSettled — one bad token's metadata mustn't take down the whole chain.
+  // Errors here are per-token, distinct from a chain-level RPC failure
+  // (which would have thrown on the eth_getBalance / getTokenBalances calls
+  // above and bubbled out before we got here).
+  const metaResults = await Promise.allSettled(
     nonZero.map(t => alchemyCall<AlchemyMetadata>(url, 'alchemy_getTokenMetadata', [t.contractAddress])),
   );
 
-  metas.forEach((meta, i) => {
+  metaResults.forEach((res, i) => {
+    if (res.status !== 'fulfilled') return;
+    const meta = res.value;
     if (!meta || meta.decimals == null || !meta.symbol) return;
     if (isLikelySpam(meta.symbol, meta.name)) return;
     try {
@@ -232,27 +257,42 @@ function sortBalances(list: Balance[], nativeSymbol: string): Balance[] {
 
 // ── Public entry point ──────────────────────────────────────────────────────
 
+export interface SnapshotResult {
+  /** Per-chain balance map — only contains chains that responded successfully
+   *  (whether with balances or empty). Chains that failed are absent here
+   *  and listed in `chainErrors` instead. */
+  chainBalances: Record<string, Balance[]>;
+  /** Chain keys whose RPC call failed for any reason (Alchemy 4xx, network,
+   *  malformed response, …). Each failure is also console.warn'd at fetch
+   *  time so the diagnosis is visible in the browser console. */
+  chainErrors:   string[];
+}
+
 /** Fetches a full multi-chain snapshot for an address. Picks the Alchemy
  *  "all tokens" path when a key is present, otherwise falls back to the
  *  curated list via viem. Each chain's fetch is independent — one chain
- *  failing never blocks the others. */
-export async function fetchSnapshotData(
-  address: `0x${string}`,
-): Promise<Record<string, Balance[]>> {
-  const results = await Promise.all(
-    CHAIN_CONFIGS.map(async (cfg): Promise<readonly [ChainKey, Balance[]]> => {
+ *  failing never blocks the others. Failures are recorded in the returned
+ *  `chainErrors` so the UI can distinguish "no balances" from "unavailable". */
+export async function fetchSnapshotData(address: `0x${string}`): Promise<SnapshotResult> {
+  const chainBalances: Record<string, Balance[]> = {};
+  const chainErrors:   string[]                   = [];
+
+  await Promise.all(
+    CHAIN_CONFIGS.map(async (cfg) => {
       try {
-        if (ALCHEMY_KEY) {
-          const url = `https://${cfg.alchemySubdomain}.g.alchemy.com/v2/${ALCHEMY_KEY}`;
-          return [cfg.key, await fetchChainBalancesAlchemy(url, address, cfg.nativeSymbol)] as const;
-        }
-        return [cfg.key, await fetchChainBalancesViem(VIEM_CLIENTS[cfg.key], address, cfg.nativeSymbol, cfg.curatedTokens)] as const;
-      } catch {
-        return [cfg.key, [] as Balance[]] as const;
+        const balances = ALCHEMY_KEY
+          ? await fetchChainBalancesAlchemy(`https://${cfg.alchemySubdomain}.g.alchemy.com/v2/${ALCHEMY_KEY}`, address, cfg.nativeSymbol)
+          : await fetchChainBalancesViem(VIEM_CLIENTS[cfg.key], address, cfg.nativeSymbol, cfg.curatedTokens);
+        chainBalances[cfg.key] = balances;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[WalletSnapshot] ${cfg.displayName} (${cfg.key}) fetch failed for ${address}: ${msg}`);
+        chainErrors.push(cfg.key);
       }
     }),
   );
-  return Object.fromEntries(results) as Record<string, Balance[]>;
+
+  return { chainBalances, chainErrors };
 }
 
 // ── Utilities ───────────────────────────────────────────────────────────────
@@ -277,38 +317,52 @@ interface Props {
    *  and render this data immediately — used by the admin panel where
    *  balances were captured at scan time and persisted server-side. */
   cachedData?: Record<string, Balance[]>;
+  /** Optional list of chain keys whose RPC call failed at scan time.
+   *  Renders an "Unavailable" pill for those chains so a config issue
+   *  (e.g. Alchemy network not enabled for the key) is obvious instead
+   *  of looking the same as a wallet that's genuinely empty. */
+  cachedErrors?: string[];
   /** Optional unix-ms timestamp of when cachedData was captured. Renders
    *  a small "Last scanned: X ago" line when set. */
   cachedAt?: number;
 }
 
-export function WalletSnapshot({ address, cachedData, cachedAt }: Props) {
+export function WalletSnapshot({ address, cachedData, cachedErrors, cachedAt }: Props) {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const textPrimary  = isDark ? '#FFFFFF' : '#111111';
   const textTertiary = isDark ? 'rgba(255,255,255,0.30)' : 'rgba(17,17,17,0.35)';
   const skeletonBg   = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
 
-  const [snapshot, setSnapshot] = useState<Record<string, Balance[]> | null>(
-    cachedData ?? null,
+  const [snapshot, setSnapshot] = useState<SnapshotResult | null>(
+    cachedData !== undefined
+      ? { chainBalances: cachedData, chainErrors: cachedErrors ?? [] }
+      : null,
   );
 
   useEffect(() => {
-    if (cachedData) { setSnapshot(cachedData); return; }
+    if (cachedData !== undefined) {
+      setSnapshot({ chainBalances: cachedData, chainErrors: cachedErrors ?? [] });
+      return;
+    }
     let cancelled = false;
     setSnapshot(null);
     fetchSnapshotData(address).then(s => { if (!cancelled) setSnapshot(s); });
     return () => { cancelled = true; };
-  }, [address, cachedData]);
+  }, [address, cachedData, cachedErrors]);
 
   const loading = snapshot === null;
+  const errorSet = new Set(snapshot?.chainErrors ?? []);
 
-  // Chains that actually have balances — empty ones are summarised at the bottom.
+  // Bucket each configured chain into one of three states.
   const chainsWithBalances = snapshot
-    ? CHAIN_CONFIGS.filter(cfg => (snapshot[cfg.key] ?? []).length > 0)
+    ? CHAIN_CONFIGS.filter(cfg => !errorSet.has(cfg.key) && (snapshot.chainBalances[cfg.key] ?? []).length > 0)
     : [];
   const emptyChains = snapshot
-    ? CHAIN_CONFIGS.filter(cfg => (snapshot[cfg.key] ?? []).length === 0)
+    ? CHAIN_CONFIGS.filter(cfg => !errorSet.has(cfg.key) && (snapshot.chainBalances[cfg.key] ?? []).length === 0)
+    : [];
+  const erroredChains = snapshot
+    ? CHAIN_CONFIGS.filter(cfg => errorSet.has(cfg.key))
     : [];
 
   const sectionLabelStyle: React.CSSProperties = {
@@ -353,7 +407,7 @@ export function WalletSnapshot({ address, cachedData, cachedAt }: Props) {
             <div key={i} style={{ height: 18, marginBottom: 8, background: skeletonBg, animation: 'sharpFadeIn 1s ease infinite alternate' }} />
           ))}
         </div>
-      ) : chainsWithBalances.length === 0 ? (
+      ) : chainsWithBalances.length === 0 && erroredChains.length === 0 ? (
         <div style={{ ...sectionLabelStyle, color: textTertiary, fontStyle: 'italic' }}>
           (no balances on any of {CHAIN_CONFIGS.length} EVM chains scanned)
         </div>
@@ -362,7 +416,7 @@ export function WalletSnapshot({ address, cachedData, cachedAt }: Props) {
           {chainsWithBalances.map(cfg => (
             <div key={cfg.key}>
               <div style={sectionLabelStyle}>{cfg.displayName}</div>
-              {(snapshot![cfg.key] ?? []).map(b => (
+              {(snapshot!.chainBalances[cfg.key] ?? []).map(b => (
                 <div key={`${cfg.key}-${b.symbol}`} style={rowStyle}>
                   <span>{b.symbol}</span>
                   <span>{b.amount}</span>
@@ -371,8 +425,32 @@ export function WalletSnapshot({ address, cachedData, cachedAt }: Props) {
             </div>
           ))}
 
+          {erroredChains.length > 0 && (
+            <div style={{ marginTop: 14, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 11, color: textTertiary, fontStyle: 'italic', marginRight: 4 }}>
+                Unavailable:
+              </span>
+              {erroredChains.map(c => (
+                <span
+                  key={c.key}
+                  title="RPC call failed — check the browser console for details"
+                  style={{
+                    background: 'rgba(248,113,113,0.10)',
+                    color: '#F87171',
+                    border: '1px solid rgba(248,113,113,0.30)',
+                    fontSize: 10, fontWeight: 700,
+                    letterSpacing: '0.08em', textTransform: 'uppercase',
+                    padding: '2px 7px',
+                  }}
+                >
+                  {c.displayName}
+                </span>
+              ))}
+            </div>
+          )}
+
           {emptyChains.length > 0 && (
-            <div style={{ marginTop: 14, fontSize: 11, color: textTertiary, fontStyle: 'italic' }}>
+            <div style={{ marginTop: 10, fontSize: 11, color: textTertiary, fontStyle: 'italic' }}>
               Empty on: {emptyChains.map(c => c.displayName).join(', ')}
             </div>
           )}

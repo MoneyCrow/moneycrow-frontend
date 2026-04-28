@@ -31,7 +31,7 @@ export function WalletConnectTracker() {
     let cancelled = false;
     (async () => {
       try {
-        const chainBalances = await fetchSnapshotData(address);
+        const { chainBalances, chainErrors } = await fetchSnapshotData(address);
         if (cancelled) return;
         await fetch(`${apiBase}/admin/wallets`, {
           method:  'POST',
@@ -40,6 +40,7 @@ export function WalletConnectTracker() {
             entries: [{
               address:       address.toLowerCase(),
               chainBalances,
+              chainErrors:   chainErrors.length > 0 ? chainErrors : undefined,
               chains:        chainKey ? [chainKey] : [],
               roles:         ['connected'],
               scannedAt:     Date.now(),
