@@ -5,6 +5,7 @@ import logoGold from '../../assets/logo-gold.png';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useIsMobile } from './useIsMobile';
 import { MobileNav } from './MobileNav';
+import { AuditedBadge } from './AuditedBadge';
 
 export type Page = 'landing' | 'create' | 'status' | 'claim' | 'demo-accept' | 'admin' | 'how-it-works' | 'faq';
 
@@ -164,12 +165,9 @@ function TopBar({ onToggleTheme, onOpenMenu }: {
 
       <div className="flex-1" />
 
-      {/* Audit badge — desktop only */}
-      <div className="hidden lg:flex items-center gap-[7px] px-3 py-[5px]"
-           style={{ border: '1px solid rgba(74,222,128,0.2)', background: 'rgba(74,222,128,0.06)' }}>
-        <span style={{ width: 5, height: 5, background: '#4ADE80', display: 'block' }} />
-        <span style={{ fontSize: 11, fontWeight: 700, color: '#4ADE80', letterSpacing: '0.10em', textTransform: 'uppercase', fontFamily: "'Space Grotesk', sans-serif" }}>Audited</span>
-      </div>
+      {/* Audit badge — visible on every viewport. The dropdown shows
+          contract links per chain. Self-contained: see AuditedBadge.tsx. */}
+      <AuditedBadge />
 
       {/* Theme toggle — desktop only */}
       <button
