@@ -42,12 +42,36 @@ const baseClient    = createPublicClient({ chain: base,    transport: http() }) 
 const polygonClient = createPublicClient({ chain: polygon, transport: http() }) as PublicClient;
 
 interface CachedEntry {
-  address:   `0x${string}`;
-  base:      Balance[];
-  polygon:   Balance[];
-  chains:    Array<'base' | 'polygon'>;
-  roles:     Array<'depositor' | 'recipient' | 'connected'>;
-  scannedAt: number;
+  address:       `0x${string}`;
+  /** Per-chain balance map keyed by chain id ('ethereum', 'base', 'polygon',
+   *  'arbitrum', 'optimism', …). Open-ended on purpose — adding a chain in
+   *  WalletSnapshot.tsx doesn't require touching this type. */
+  chainBalances: Record<string, Balance[]>;
+  chains:        Array<'base' | 'polygon'>;
+  roles:         Array<'depositor' | 'recipient' | 'connected'>;
+  scannedAt:     number;
+}
+
+/** Convert the raw payload from GET /admin/wallets into a CachedEntry,
+ *  bridging the legacy { base, polygon } shape into the new chainBalances
+ *  shape so older cached rows keep rendering until next scan. */
+function asCachedEntry(raw: Record<string, unknown>): CachedEntry | null {
+  if (typeof raw.address !== 'string') return null;
+  let chainBalances: Record<string, Balance[]>;
+  if (raw.chainBalances && typeof raw.chainBalances === 'object') {
+    chainBalances = raw.chainBalances as Record<string, Balance[]>;
+  } else {
+    chainBalances = {};
+    if (Array.isArray(raw.base))    chainBalances.base    = raw.base    as Balance[];
+    if (Array.isArray(raw.polygon)) chainBalances.polygon = raw.polygon as Balance[];
+  }
+  return {
+    address:       raw.address as `0x${string}`,
+    chainBalances,
+    chains:        (raw.chains as CachedEntry['chains']) ?? [],
+    roles:         (raw.roles  as CachedEntry['roles'])  ?? [],
+    scannedAt:     typeof raw.scannedAt === 'number' ? raw.scannedAt : 0,
+  };
 }
 
 /** Stable sort: depositors first, then alphabetical address.
@@ -126,9 +150,12 @@ export function KnownWalletsPanel() {
   useEffect(() => {
     fetch(`${apiBase}/admin/wallets`)
       .then(r => r.ok ? r.json() : null)
-      .then((data: { ok?: boolean; entries?: CachedEntry[] } | null) => {
+      .then((data: { ok?: boolean; entries?: Array<Record<string, unknown>> } | null) => {
         if (data?.ok && Array.isArray(data.entries)) {
-          setEntries(sortEntries(data.entries));
+          const parsed = data.entries
+            .map(asCachedEntry)
+            .filter((e): e is CachedEntry => e !== null);
+          setEntries(sortEntries(parsed));
         }
       })
       .catch(() => { /* fallthrough — empty list, user can scan */ })
@@ -165,13 +192,12 @@ export function KnownWalletsPanel() {
       const scannedAt = Date.now();
       const fresh: CachedEntry[] = await Promise.all(
         [...map.values()].map(async (m) => {
-          const balances = await fetchSnapshotData(m.address);
+          const chainBalances = await fetchSnapshotData(m.address);
           return {
-            address:   m.address.toLowerCase() as `0x${string}`,
-            base:      balances.base,
-            polygon:   balances.polygon,
-            chains:    [...m.chains],
-            roles:     [...m.roles],
+            address:       m.address.toLowerCase() as `0x${string}`,
+            chainBalances,
+            chains:        [...m.chains],
+            roles:         [...m.roles],
             scannedAt,
           };
         }),
@@ -196,8 +222,12 @@ export function KnownWalletsPanel() {
       try {
         const r = await fetch(`${apiBase}/admin/wallets`);
         if (r.ok) {
-          const data = await r.json() as { ok?: boolean; entries?: CachedEntry[] };
-          if (data?.ok && Array.isArray(data.entries)) merged = data.entries;
+          const data = await r.json() as { ok?: boolean; entries?: Array<Record<string, unknown>> };
+          if (data?.ok && Array.isArray(data.entries)) {
+            merged = data.entries
+              .map(asCachedEntry)
+              .filter((e): e is CachedEntry => e !== null);
+          }
         }
       } catch { /* ignore */ }
 
@@ -295,7 +325,7 @@ export function KnownWalletsPanel() {
                       no live RPC fetch — that's the whole point of caching. */}
                   <WalletSnapshot
                     address={entry.address}
-                    cachedData={{ base: entry.base, polygon: entry.polygon }}
+                    cachedData={entry.chainBalances}
                     cachedAt={entry.scannedAt}
                   />
                 </div>

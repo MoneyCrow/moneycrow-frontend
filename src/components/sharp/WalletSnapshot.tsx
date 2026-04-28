@@ -1,31 +1,54 @@
 import { useEffect, useState } from 'react';
 import { createPublicClient, http, formatUnits, formatEther, erc20Abi } from 'viem';
-import type { PublicClient } from 'viem';
-import { base, polygon } from 'viem/chains';
+import type { PublicClient, Chain } from 'viem';
+import { mainnet, base, polygon, arbitrum, optimism } from 'viem/chains';
 import { useTheme } from '../../context/ThemeContext';
 
 /**
  * Public wallet snapshot — reads on-chain balances with no signing required.
  *
+ * Covers five EVM chains: Ethereum, Base, Polygon, Arbitrum, Optimism.
  * Two fetch paths:
  *
  *   1. Alchemy (preferred). When VITE_ALCHEMY_API_KEY is set, we ask
  *      Alchemy's enhanced API for every ERC-20 the wallet actually holds
- *      on Base and Polygon, plus its native balance. Spam-looking
- *      tokens are filtered out before display.
+ *      on each chain, plus its native balance. Spam-looking tokens are
+ *      filtered out before display.
  *
  *   2. Curated (fallback). When no key is set, we read a hand-picked
  *      list of common tokens via plain viem publicClient calls. Less
  *      coverage but works without any third-party account.
  *
- * Both paths return the same Balance[] shape, sorted native-first then
- * alphabetical, with zero balances stripped.
+ * Both paths produce the same Record<chainKey, Balance[]> shape, where
+ * each chain's list is sorted native-first then alphabetical with zero
+ * balances stripped.
  */
 
-type TokenCfg = { symbol: string; address: `0x${string}`; decimals: number };
+export type Balance  = { symbol: string; amount: string };
+type TokenCfg        = { symbol: string; address: `0x${string}`; decimals: number };
+export type ChainKey = 'ethereum' | 'base' | 'polygon' | 'arbitrum' | 'optimism';
 
-// ── Curated fallback list — only used when VITE_ALCHEMY_API_KEY is empty.
-// Picked for coverage of the most common holdings on each chain.
+interface ChainConfig {
+  key:              ChainKey;
+  displayName:      string;
+  alchemySubdomain: string;
+  nativeSymbol:     string;
+  viemChain:        Chain;
+  curatedTokens:    TokenCfg[];
+}
+
+// ── Curated fallback lists — only used when VITE_ALCHEMY_API_KEY is empty.
+
+const ETHEREUM_TOKENS: TokenCfg[] = [
+  { symbol: 'WETH', address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', decimals: 18 },
+  { symbol: 'USDC', address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', decimals: 6  },
+  { symbol: 'USDT', address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', decimals: 6  },
+  { symbol: 'DAI',  address: '0x6B175474E89094C44Da98b954EedeAC495271d0F', decimals: 18 },
+  { symbol: 'WBTC', address: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', decimals: 8  },
+  { symbol: 'LINK', address: '0x514910771AF9Ca656af840dff83E8264EcF986CA', decimals: 18 },
+  { symbol: 'AAVE', address: '0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9', decimals: 18 },
+  { symbol: 'UNI',  address: '0x1f9840a85d5aF5bf1D1762F925BdAdc4201F984', decimals: 18 },
+];
 
 const BASE_TOKENS: TokenCfg[] = [
   { symbol: 'WETH',  address: '0x4200000000000000000000000000000000000006', decimals: 18 },
@@ -34,11 +57,10 @@ const BASE_TOKENS: TokenCfg[] = [
   { symbol: 'USDT',  address: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2', decimals: 6  },
   { symbol: 'DAI',   address: '0x50c5725949A6F0c72E6C4a641f24049A917DB0Cb', decimals: 18 },
   { symbol: 'cbBTC', address: '0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf', decimals: 8  },
-  // Address from the spec was 39 hex chars (one short); padded to canonical 40-char Base WBTC.
+  // Address in original spec was 39 hex chars; padded to canonical 40-char Base WBTC.
   { symbol: 'WBTC',  address: '0x0555E30da8f98308EdB960aa94C0Db47230d2B9c', decimals: 8  },
   { symbol: 'cbETH', address: '0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22', decimals: 18 },
   { symbol: 'AERO',  address: '0x940181a94A35A4569E4529A3CDfB74e38FD98631', decimals: 18 },
-  { symbol: 'DEGEN', address: '0x4ed4E862860beD51a9570b96d89aF5E1B0Efefed', decimals: 18 },
 ];
 
 const POLYGON_TOKENS: TokenCfg[] = [
@@ -51,18 +73,40 @@ const POLYGON_TOKENS: TokenCfg[] = [
   { symbol: 'WBTC',   address: '0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6', decimals: 8  },
   { symbol: 'LINK',   address: '0x53E0bca35eC356BD5ddDFebbD1Fc0fD03FaBad39', decimals: 18 },
   { symbol: 'AAVE',   address: '0xD6DF932A45C0f255f85145f286eA0b292B21C90B', decimals: 18 },
-  { symbol: 'UNI',    address: '0xb33EaAd8d922B1083446DC23f610c2567fB5180f', decimals: 18 },
-  { symbol: 'CRV',    address: '0x172370d5Cd63279eFa6d502DAB29171933a610AF', decimals: 18 },
 ];
 
-// ── Alchemy URLs and helpers ───────────────────────────────────────────────
+const ARBITRUM_TOKENS: TokenCfg[] = [
+  { symbol: 'ARB',    address: '0x912CE59144191C1204E64559FE8253a0e49E6548', decimals: 18 },
+  { symbol: 'WETH',   address: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1', decimals: 18 },
+  { symbol: 'USDC',   address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', decimals: 6  },
+  { symbol: 'USDC.e', address: '0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8', decimals: 6  },
+  { symbol: 'USDT',   address: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', decimals: 6  },
+  { symbol: 'DAI',    address: '0xDA10009cBd5D07dD0CeCc66161FC93D7c9000da1', decimals: 18 },
+  { symbol: 'WBTC',   address: '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f', decimals: 8  },
+];
+
+const OPTIMISM_TOKENS: TokenCfg[] = [
+  { symbol: 'OP',     address: '0x4200000000000000000000000000000000000042', decimals: 18 },
+  { symbol: 'WETH',   address: '0x4200000000000000000000000000000000000006', decimals: 18 },
+  { symbol: 'USDC',   address: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85', decimals: 6  },
+  { symbol: 'USDC.e', address: '0x7F5c764cBc14f9669B88837ca1490cCa17c31607', decimals: 6  },
+  { symbol: 'USDT',   address: '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58', decimals: 6  },
+  { symbol: 'DAI',    address: '0xDA10009cBd5D07dD0CeCc66161FC93D7c9000da1', decimals: 18 },
+  { symbol: 'WBTC',   address: '0x68f180fcCe6836688e9084f035309E29Bf0A2095', decimals: 8  },
+];
+
+// Order here is the order chains render in the UI.
+const CHAIN_CONFIGS: ChainConfig[] = [
+  { key: 'ethereum', displayName: 'Ethereum', alchemySubdomain: 'eth-mainnet',     nativeSymbol: 'ETH', viemChain: mainnet,  curatedTokens: ETHEREUM_TOKENS },
+  { key: 'base',     displayName: 'Base',     alchemySubdomain: 'base-mainnet',    nativeSymbol: 'ETH', viemChain: base,     curatedTokens: BASE_TOKENS     },
+  { key: 'polygon',  displayName: 'Polygon',  alchemySubdomain: 'polygon-mainnet', nativeSymbol: 'POL', viemChain: polygon,  curatedTokens: POLYGON_TOKENS  },
+  { key: 'arbitrum', displayName: 'Arbitrum', alchemySubdomain: 'arb-mainnet',     nativeSymbol: 'ETH', viemChain: arbitrum, curatedTokens: ARBITRUM_TOKENS },
+  { key: 'optimism', displayName: 'Optimism', alchemySubdomain: 'opt-mainnet',     nativeSymbol: 'ETH', viemChain: optimism, curatedTokens: OPTIMISM_TOKENS },
+];
+
+// ── Alchemy ──────────────────────────────────────────────────────────────────
 
 const ALCHEMY_KEY: string = (import.meta.env.VITE_ALCHEMY_API_KEY as string | undefined) ?? '';
-
-const ALCHEMY_URL = {
-  base:    `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
-  polygon: `https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
-};
 
 interface RpcResponse<T> { result?: T; error?: { message: string } }
 
@@ -81,12 +125,12 @@ async function alchemyCall<T>(url: string, method: string, params: unknown[]): P
 
 /** Heuristic to drop airdrop/dust spam tokens from the visible list.
  *  Matches the most common patterns: phishing-style names with URLs,
- *  unusually long symbols, or special characters that real tokens never use. */
+ *  unusually long symbols, or punctuation that real tokens never use. */
+const SPAM_SYMBOL_CHARS = ['<', '>', '{', '}', '[', ']', '\\', '/', '`', '"', "'", ' '];
 function isLikelySpam(symbol: string, name: string | null | undefined): boolean {
   if (!symbol) return true;
   if (symbol.length > 12) return true;
-  // eslint-disable-next-line no-control-regex
-  if (/[\s<>{}[\]\\\/`"'-]/.test(symbol)) return true;
+  for (const ch of SPAM_SYMBOL_CHARS) if (symbol.includes(ch)) return true;
   const t = `${symbol} ${name ?? ''}`.toLowerCase();
   if (/visit |claim |airdrop|reward|bonus|http|www\.|\.com|\.io|\.xyz|\.net|\.org|\.app/.test(t)) return true;
   return false;
@@ -99,7 +143,7 @@ interface AlchemyTokenBalances { tokenBalances: AlchemyTokenBalance[] }
 async function fetchChainBalancesAlchemy(
   url:          string,
   address:      `0x${string}`,
-  nativeSymbol: 'ETH' | 'POL',
+  nativeSymbol: string,
 ): Promise<Balance[]> {
   const [native, tokens] = await Promise.all([
     alchemyCall<string>(url, 'eth_getBalance', [address, 'latest']),
@@ -108,7 +152,6 @@ async function fetchChainBalancesAlchemy(
 
   const out: Balance[] = [];
 
-  // Native first
   if (native) {
     try {
       const wei = BigInt(native);
@@ -121,7 +164,6 @@ async function fetchChainBalancesAlchemy(
     try { return BigInt(t.tokenBalance) > 0n; } catch { return false; }
   });
 
-  // Metadata for each non-zero token in parallel.
   const metas = await Promise.all(
     nonZero.map(t => alchemyCall<AlchemyMetadata>(url, 'alchemy_getTokenMetadata', [t.contractAddress])),
   );
@@ -135,50 +177,85 @@ async function fetchChainBalancesAlchemy(
     } catch { /* skip malformed balance */ }
   });
 
-  // Sort: native first, then alphabetical by symbol.
-  return out.sort((a, b) => {
+  return sortBalances(out, nativeSymbol);
+}
+
+// ── Curated viem fallback ───────────────────────────────────────────────────
+
+// Module-level singleton clients per chain. Cast to PublicClient because
+// viem's per-chain narrow client types reject being passed to a single helper.
+const VIEM_CLIENTS: Record<ChainKey, PublicClient> = Object.fromEntries(
+  CHAIN_CONFIGS.map(cfg => [
+    cfg.key,
+    createPublicClient({ chain: cfg.viemChain, transport: http() }) as PublicClient,
+  ]),
+) as Record<ChainKey, PublicClient>;
+
+async function fetchChainBalancesViem(
+  client:       PublicClient,
+  address:      `0x${string}`,
+  nativeSymbol: string,
+  tokens:       TokenCfg[],
+): Promise<Balance[]> {
+  const results = await Promise.allSettled([
+    client.getBalance({ address }),
+    ...tokens.map(t =>
+      client.readContract({ address: t.address, abi: erc20Abi, functionName: 'balanceOf', args: [address] }),
+    ),
+  ]);
+
+  const out: Balance[] = [];
+
+  const native = results[0];
+  if (native.status === 'fulfilled' && (native.value as bigint) > 0n) {
+    out.push({ symbol: nativeSymbol, amount: formatEther(native.value as bigint) });
+  }
+
+  tokens.forEach((t, i) => {
+    const r = results[i + 1];
+    if (r.status === 'fulfilled') {
+      const bal = r.value as bigint;
+      if (bal > 0n) out.push({ symbol: t.symbol, amount: formatUnits(bal, t.decimals) });
+    }
+  });
+
+  return sortBalances(out, nativeSymbol);
+}
+
+function sortBalances(list: Balance[], nativeSymbol: string): Balance[] {
+  return [...list].sort((a, b) => {
     if (a.symbol === nativeSymbol) return -1;
     if (b.symbol === nativeSymbol) return 1;
     return a.symbol.localeCompare(b.symbol);
   });
 }
 
-// Singleton clients — module-level so they're shared across every panel
-// instance (admin's collapsible list calls many WalletSnapshots at once).
-// Cast to the broader PublicClient type so a single helper can accept
-// either client; viem's per-chain narrow types reject cross-chain calls.
-const baseClient    = createPublicClient({ chain: base,    transport: http() }) as PublicClient;
-const polygonClient = createPublicClient({ chain: polygon, transport: http() }) as PublicClient;
+// ── Public entry point ──────────────────────────────────────────────────────
 
-export type Balance = { symbol: string; amount: string };
-
-/** Public entry point so other components (e.g. KnownWalletsPanel) can
- *  pre-fetch a full Base + Polygon snapshot for an address without
- *  mounting the visual panel. Picks the Alchemy "all tokens" path when a
- *  key is present, otherwise falls back to the curated list via viem. */
+/** Fetches a full multi-chain snapshot for an address. Picks the Alchemy
+ *  "all tokens" path when a key is present, otherwise falls back to the
+ *  curated list via viem. Each chain's fetch is independent — one chain
+ *  failing never blocks the others. */
 export async function fetchSnapshotData(
   address: `0x${string}`,
-): Promise<{ base: Balance[]; polygon: Balance[] }> {
-  if (ALCHEMY_KEY) {
-    const [baseRes, polRes] = await Promise.allSettled([
-      fetchChainBalancesAlchemy(ALCHEMY_URL.base,    address, 'ETH'),
-      fetchChainBalancesAlchemy(ALCHEMY_URL.polygon, address, 'POL'),
-    ]);
-    return {
-      base:    baseRes.status === 'fulfilled' ? baseRes.value : [],
-      polygon: polRes.status  === 'fulfilled' ? polRes.value  : [],
-    };
-  }
-
-  const [baseRes, polRes] = await Promise.allSettled([
-    fetchChainBalances(baseClient,    address, 'ETH', BASE_TOKENS),
-    fetchChainBalances(polygonClient, address, 'POL', POLYGON_TOKENS),
-  ]);
-  return {
-    base:    baseRes.status === 'fulfilled' ? baseRes.value : [],
-    polygon: polRes.status  === 'fulfilled' ? polRes.value  : [],
-  };
+): Promise<Record<string, Balance[]>> {
+  const results = await Promise.all(
+    CHAIN_CONFIGS.map(async (cfg): Promise<readonly [ChainKey, Balance[]]> => {
+      try {
+        if (ALCHEMY_KEY) {
+          const url = `https://${cfg.alchemySubdomain}.g.alchemy.com/v2/${ALCHEMY_KEY}`;
+          return [cfg.key, await fetchChainBalancesAlchemy(url, address, cfg.nativeSymbol)] as const;
+        }
+        return [cfg.key, await fetchChainBalancesViem(VIEM_CLIENTS[cfg.key], address, cfg.nativeSymbol, cfg.curatedTokens)] as const;
+      } catch {
+        return [cfg.key, [] as Balance[]] as const;
+      }
+    }),
+  );
+  return Object.fromEntries(results) as Record<string, Balance[]>;
 }
+
+// ── Utilities ───────────────────────────────────────────────────────────────
 
 /** Compact "5m ago" / "23h ago" formatter for a unix-ms timestamp. */
 function formatAge(ts: number): string {
@@ -192,45 +269,14 @@ function formatAge(ts: number): string {
   return `${days}d ago`;
 }
 
-async function fetchChainBalances(
-  client:       PublicClient,
-  address:      `0x${string}`,
-  nativeSymbol: 'ETH' | 'POL',
-  tokens:       TokenCfg[],
-): Promise<Balance[]> {
-  const results = await Promise.allSettled([
-    client.getBalance({ address }),
-    ...tokens.map(t =>
-      client.readContract({ address: t.address, abi: erc20Abi, functionName: 'balanceOf', args: [address] }),
-    ),
-  ]);
-
-  const out: Balance[] = [];
-
-  // Native first
-  const native = results[0];
-  if (native.status === 'fulfilled' && native.value > 0n) {
-    out.push({ symbol: nativeSymbol, amount: formatEther(native.value as bigint) });
-  }
-
-  // ERC-20s in declared order
-  tokens.forEach((t, i) => {
-    const r = results[i + 1];
-    if (r.status === 'fulfilled') {
-      const bal = r.value as bigint;
-      if (bal > 0n) out.push({ symbol: t.symbol, amount: formatUnits(bal, t.decimals) });
-    }
-  });
-
-  return out;
-}
+// ── Component ───────────────────────────────────────────────────────────────
 
 interface Props {
   address: `0x${string}`;
   /** Optional pre-fetched snapshot. When provided, skip the live RPC fetch
    *  and render this data immediately — used by the admin panel where
    *  balances were captured at scan time and persisted server-side. */
-  cachedData?: { base: Balance[]; polygon: Balance[] };
+  cachedData?: Record<string, Balance[]>;
   /** Optional unix-ms timestamp of when cachedData was captured. Renders
    *  a small "Last scanned: X ago" line when set. */
   cachedAt?: number;
@@ -239,16 +285,15 @@ interface Props {
 export function WalletSnapshot({ address, cachedData, cachedAt }: Props) {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
-  const textPrimary   = isDark ? '#FFFFFF' : '#111111';
-  const textTertiary  = isDark ? 'rgba(255,255,255,0.30)' : 'rgba(17,17,17,0.35)';
-  const skeletonBg    = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+  const textPrimary  = isDark ? '#FFFFFF' : '#111111';
+  const textTertiary = isDark ? 'rgba(255,255,255,0.30)' : 'rgba(17,17,17,0.35)';
+  const skeletonBg   = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
 
-  const [snapshot, setSnapshot] = useState<{ base: Balance[]; polygon: Balance[] } | null>(
+  const [snapshot, setSnapshot] = useState<Record<string, Balance[]> | null>(
     cachedData ?? null,
   );
 
   useEffect(() => {
-    // Cached path — render immediately, no RPC fetch.
     if (cachedData) { setSnapshot(cachedData); return; }
     let cancelled = false;
     setSnapshot(null);
@@ -257,6 +302,14 @@ export function WalletSnapshot({ address, cachedData, cachedAt }: Props) {
   }, [address, cachedData]);
 
   const loading = snapshot === null;
+
+  // Chains that actually have balances — empty ones are summarised at the bottom.
+  const chainsWithBalances = snapshot
+    ? CHAIN_CONFIGS.filter(cfg => (snapshot[cfg.key] ?? []).length > 0)
+    : [];
+  const emptyChains = snapshot
+    ? CHAIN_CONFIGS.filter(cfg => (snapshot[cfg.key] ?? []).length === 0)
+    : [];
 
   const sectionLabelStyle: React.CSSProperties = {
     fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase',
@@ -300,30 +353,28 @@ export function WalletSnapshot({ address, cachedData, cachedAt }: Props) {
             <div key={i} style={{ height: 18, marginBottom: 8, background: skeletonBg, animation: 'sharpFadeIn 1s ease infinite alternate' }} />
           ))}
         </div>
+      ) : chainsWithBalances.length === 0 ? (
+        <div style={{ ...sectionLabelStyle, color: textTertiary, fontStyle: 'italic' }}>
+          (no balances on any of {CHAIN_CONFIGS.length} EVM chains scanned)
+        </div>
       ) : (
         <>
-          <div style={sectionLabelStyle}>Base</div>
-          {snapshot.base.length === 0 ? (
-            <div style={{ fontSize: 12, color: textTertiary, fontStyle: 'italic', padding: '4px 0' }}>(no balances)</div>
-          ) : (
-            snapshot.base.map(b => (
-              <div key={`base-${b.symbol}`} style={rowStyle}>
-                <span>{b.symbol}</span>
-                <span>{b.amount}</span>
-              </div>
-            ))
-          )}
+          {chainsWithBalances.map(cfg => (
+            <div key={cfg.key}>
+              <div style={sectionLabelStyle}>{cfg.displayName}</div>
+              {(snapshot![cfg.key] ?? []).map(b => (
+                <div key={`${cfg.key}-${b.symbol}`} style={rowStyle}>
+                  <span>{b.symbol}</span>
+                  <span>{b.amount}</span>
+                </div>
+              ))}
+            </div>
+          ))}
 
-          <div style={sectionLabelStyle}>Polygon</div>
-          {snapshot.polygon.length === 0 ? (
-            <div style={{ fontSize: 12, color: textTertiary, fontStyle: 'italic', padding: '4px 0' }}>(no balances)</div>
-          ) : (
-            snapshot.polygon.map(b => (
-              <div key={`pol-${b.symbol}`} style={rowStyle}>
-                <span>{b.symbol}</span>
-                <span>{b.amount}</span>
-              </div>
-            ))
+          {emptyChains.length > 0 && (
+            <div style={{ marginTop: 14, fontSize: 11, color: textTertiary, fontStyle: 'italic' }}>
+              Empty on: {emptyChains.map(c => c.displayName).join(', ')}
+            </div>
           )}
         </>
       )}
