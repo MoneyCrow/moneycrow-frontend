@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RainbowKitProvider, darkTheme } from '@rainbow-me/rainbowkit';
 import '@rainbow-me/rainbowkit/styles.css';
 import { config } from './wagmi';
+import { TronProvider } from './context/TronContext';
 import App from './App';
 import './index.css';
 
@@ -68,7 +69,13 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             borderRadius: 'small',
             fontStack: 'system',
           })}>
-            <App />
+            {/* TronProvider runs in parallel with WagmiProvider — they don't
+                share state. Components decide which to use based on the
+                user-selected chain. TronLink isn't EIP-1193 so we can't
+                wedge it into wagmi's connector model. */}
+            <TronProvider>
+              <App />
+            </TronProvider>
           </RainbowKitProvider>
         </QueryClientProvider>
       </WagmiProvider>

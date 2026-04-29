@@ -6,6 +6,7 @@ import { SharpButton } from '../components/sharp/SharpButton';
 import { SharpCard } from '../components/sharp/SharpCard';
 import { SharpInput, SharpTextarea } from '../components/sharp/SharpInput';
 import { SharpPageHeader } from '../components/sharp/SharpPageHeader';
+import { TronStatusBanner } from '../components/TronStatusBanner';
 import { useTheme } from '../context/ThemeContext';
 
 const ERC20_ABI = [
@@ -228,6 +229,12 @@ export default function DepositForm() {
   return (
     <div>
       <SharpPageHeader title="Create Escrow" subtitle="Lock funds and set terms for a trustless transaction." />
+
+      {/* TronLink-aware status row. Renders nothing when TronLink is not
+          installed; otherwise surfaces "Coming soon" / "Connect" / "Ready"
+          inline with the existing EVM form so TRON users have a path
+          forward without disturbing MetaMask/WalletConnect users. */}
+      <TronStatusBanner variant="deposit" />
 
       <SharpCard style={{ padding: '28px 32px' }}>
         {/* Mode toggle */}

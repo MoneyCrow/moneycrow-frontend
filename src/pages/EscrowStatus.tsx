@@ -7,6 +7,7 @@ import { SharpCard } from '../components/sharp/SharpCard';
 import { SharpInput } from '../components/sharp/SharpInput';
 import { SharpBadge } from '../components/sharp/SharpBadge';
 import { SharpPageHeader } from '../components/sharp/SharpPageHeader';
+import { TronStatusBanner } from '../components/TronStatusBanner';
 import { useTheme } from '../context/ThemeContext';
 
 const ERC20_META_ABI = [
@@ -271,6 +272,11 @@ export default function EscrowStatus({ onGoToClaim }: Props) {
   return (
     <div>
       <SharpPageHeader title="My Escrows" subtitle="Look up any escrow by depositor address — no wallet needed." />
+
+      {/* TronLink-aware status row. Renders nothing if TronLink is absent;
+          otherwise surfaces the connect / ready / coming-soon state for the
+          recipient acceptance flow on TRON. */}
+      <TronStatusBanner variant="accept" />
 
       <SharpCard style={{ padding: '28px 32px' }}>
         {/* Network selector */}
