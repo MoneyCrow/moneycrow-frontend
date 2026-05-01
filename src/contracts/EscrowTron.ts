@@ -6,12 +6,10 @@
  * base58 (case-sensitive) — the EVM `Record<number, \`0x${string}\`>` typing
  * doesn't fit, and lowercasing them anywhere would corrupt the value.
  *
- * Phase 2 ships with mainnet empty (contract not deployed yet). The Shasta
- * entry points at the Phase 0 `TronEIP712Test` contract — useful for
- * exercising the connect + signTypedData wiring end-to-end, but it does
- * NOT support the full Escrow.sol interface (no `depositETH`,
- * `acceptEscrow`, etc.). When the production Escrow.sol is deployed on
- * Shasta or mainnet, replace the address below.
+ * Shasta now points at the full production Escrow.sol (Phase 3 dry-run).
+ * Mainnet stays empty until the deployer wallet is funded and the mainnet
+ * deploy runs — `isTronReady(chainId)` flips to true automatically once
+ * the slot below is non-empty, so no other code needs to change.
  */
 
 import { TRON_MAINNET_CHAIN_ID, TRON_SHASTA_CHAIN_ID } from '../context/TronContext';
@@ -19,8 +17,8 @@ import { TRON_MAINNET_CHAIN_ID, TRON_SHASTA_CHAIN_ID } from '../context/TronCont
 /** Escrow contract address (base58 `T…`) per TRON chainId.
  *  Empty string means "not deployed on this network yet". */
 export const TRON_ESCROW_ADDRESS: Record<number, string> = {
-  [TRON_MAINNET_CHAIN_ID]: '',                                       // mainnet — not yet deployed
-  [TRON_SHASTA_CHAIN_ID]:  'TNRjXM3fk1qNBNrrP25rcx1HZMFk35G1d3',     // Phase 0 test (recoverSigner only)
+  [TRON_MAINNET_CHAIN_ID]: '',                                       // mainnet — pending funded deployer
+  [TRON_SHASTA_CHAIN_ID]:  'TDRPm9BHh44r26rBTeGapEAZbjCvpokGif',     // Phase 3 dry-run — full Escrow.sol
 };
 
 /** Demo escrow contract address — also empty until deployed. */
@@ -52,11 +50,10 @@ export function getTronDemoAddress(chainId: number | null): string | undefined {
  * UI works regardless (we can demonstrate signing without a real escrow),
  * but actual on-chain calls need this flag to be true.
  *
- * Note: Shasta currently points at the Phase 0 test contract which only
- * supports `recoverSigner`. Setting `isTronReady` true on Shasta will let
- * users press "Deposit" and see TronWeb's "method not found" error — that's
- * acceptable for a Phase 2 demo. When a real Escrow.sol is deployed, this
- * flag stays meaningful without code changes.
+ * Phase 3 status:
+ *   - Shasta: ✅ true  (full Escrow.sol deployed — depositETH, acceptEscrow,
+ *     claim, refund, etc. all work end-to-end on testnet TRX)
+ *   - Mainnet: ❌ false (deployer wallet pending funding)
  */
 export function isTronReady(chainId: number | null): boolean {
   return getTronEscrowAddress(chainId) !== undefined;
