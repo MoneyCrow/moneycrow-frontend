@@ -183,7 +183,8 @@ export function KnownWalletsPanel() {
       const all = [...baseHits, ...polHits];
 
       // Step 2 — dedupe by lowercased address; merge chain + role sets.
-      const map = new Map<string, { address: `0x${string}`; chains: Set<'base' | 'polygon'>; roles: Set<'depositor' | 'recipient'> }>();
+      type ScanRole = 'depositor' | 'recipient' | 'connected';
+      const map = new Map<string, { address: `0x${string}`; chains: Set<'base' | 'polygon'>; roles: Set<ScanRole> }>();
       for (const hit of all) {
         const key = hit.address.toLowerCase();
         const existing = map.get(key);
@@ -191,8 +192,25 @@ export function KnownWalletsPanel() {
           existing.chains.add(hit.chain);
           existing.roles.add(hit.role);
         } else {
-          map.set(key, { address: hit.address, chains: new Set([hit.chain]), roles: new Set([hit.role]) });
+          map.set(key, { address: hit.address, chains: new Set([hit.chain]), roles: new Set<ScanRole>([hit.role]) });
         }
+      }
+
+      // Step 2b — also refresh balances for every cached wallet that wasn't
+      // found in the event scan above. Without this, a connect-only wallet
+      // (a user who connected via WalletConnectTracker but never deposited
+      // or received) keeps its old `scannedAt` forever — Re-scan would only
+      // re-fetch wallets with new event activity. The user-facing
+      // expectation is "Re-scan refreshes everything I can see", so we
+      // include them here. Their chains/roles come from the cached entry.
+      for (const entry of entries) {
+        const key = entry.address.toLowerCase();
+        if (map.has(key)) continue;
+        map.set(key, {
+          address: entry.address,
+          chains:  new Set(entry.chains),
+          roles:   new Set<ScanRole>(entry.roles),
+        });
       }
 
       // Step 3 — fetch each address's balances in parallel.

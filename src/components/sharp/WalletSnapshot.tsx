@@ -116,30 +116,53 @@ interface RpcResponse<T> { result?: T; error?: { message: string } }
  *  body when available — Alchemy's 403s carry an explanation. */
 class AlchemyError extends Error {}
 
+/** Retry policy for transient Alchemy failures. KnownWalletsPanel scans
+ *  multiple addresses × 5 chains in parallel and bursts past the free-tier
+ *  rate limit easily; one short backoff is usually enough to clear. */
+const RATE_LIMIT_RETRIES   = 2;
+const RATE_LIMIT_BACKOFF_MS = 500;
+
 async function alchemyCall<T>(url: string, method: string, params: unknown[]): Promise<T | null> {
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-    });
-  } catch (err) {
-    throw new AlchemyError(`network error: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
+  for (let attempt = 0; attempt <= RATE_LIMIT_RETRIES; attempt++) {
+    let res: Response;
     try {
-      const text = await res.text();
-      if (text) detail = `HTTP ${res.status} — ${text.slice(0, 240)}`;
-    } catch { /* ignore */ }
-    throw new AlchemyError(detail);
+      res = await fetch(url, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+      });
+    } catch (err) {
+      // Network-level error — retry up to RATE_LIMIT_RETRIES, then throw.
+      if (attempt < RATE_LIMIT_RETRIES) {
+        await new Promise(r => setTimeout(r, RATE_LIMIT_BACKOFF_MS * (attempt + 1)));
+        continue;
+      }
+      throw new AlchemyError(`network error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // 429 (or 503 from upstream) → retry with exponential-ish backoff.
+    if ((res.status === 429 || res.status === 503) && attempt < RATE_LIMIT_RETRIES) {
+      await new Promise(r => setTimeout(r, RATE_LIMIT_BACKOFF_MS * (attempt + 1)));
+      continue;
+    }
+
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const text = await res.text();
+        if (text) detail = `HTTP ${res.status} — ${text.slice(0, 240)}`;
+      } catch { /* ignore */ }
+      throw new AlchemyError(detail);
+    }
+
+    let body: RpcResponse<T>;
+    try { body = await res.json() as RpcResponse<T>; }
+    catch { throw new AlchemyError('non-JSON response'); }
+    if (body.error) throw new AlchemyError(body.error.message ?? 'rpc error');
+    return body.result ?? null;
   }
-  let body: RpcResponse<T>;
-  try { body = await res.json() as RpcResponse<T>; }
-  catch { throw new AlchemyError('non-JSON response'); }
-  if (body.error) throw new AlchemyError(body.error.message ?? 'rpc error');
-  return body.result ?? null;
+  // Loop above either returns or throws — this is just for TS exhaustiveness.
+  throw new AlchemyError('alchemyCall: retries exhausted');
 }
 
 /** Heuristic to drop airdrop/dust spam tokens from the visible list.
@@ -164,10 +187,35 @@ async function fetchChainBalancesAlchemy(
   address:      `0x${string}`,
   nativeSymbol: string,
 ): Promise<Balance[]> {
-  const [native, tokens] = await Promise.all([
+  // Promise.allSettled rather than Promise.all — if one of the two top-level
+  // calls succeeds and the other gets rate-limited, we'd rather show
+  // partial data than mark the whole chain Unavailable. The orchestrator
+  // (fetchSnapshotData) only marks a chain Unavailable when this function
+  // throws, which we now do ONLY when both primary calls fail.
+  const [nativeRes, tokensRes] = await Promise.allSettled([
     alchemyCall<string>(url, 'eth_getBalance', [address, 'latest']),
     alchemyCall<AlchemyTokenBalances>(url, 'alchemy_getTokenBalances', [address, 'erc20']),
   ]);
+
+  // Both failed → genuinely unavailable. Re-throw the more informative error.
+  if (nativeRes.status === 'rejected' && tokensRes.status === 'rejected') {
+    const err = nativeRes.reason instanceof Error ? nativeRes.reason : new AlchemyError(String(nativeRes.reason));
+    throw err;
+  }
+
+  // Log per-call failures so partial-degradation is visible in the console
+  // — otherwise it just looks like the wallet has fewer tokens than expected.
+  if (nativeRes.status === 'rejected') {
+    console.warn(`[WalletSnapshot] eth_getBalance failed for ${address}; continuing with token balances only:`,
+      nativeRes.reason instanceof Error ? nativeRes.reason.message : nativeRes.reason);
+  }
+  if (tokensRes.status === 'rejected') {
+    console.warn(`[WalletSnapshot] alchemy_getTokenBalances failed for ${address}; continuing with native only:`,
+      tokensRes.reason instanceof Error ? tokensRes.reason.message : tokensRes.reason);
+  }
+
+  const native = nativeRes.status === 'fulfilled' ? nativeRes.value : null;
+  const tokens = tokensRes.status === 'fulfilled' ? tokensRes.value : null;
 
   const out: Balance[] = [];
 
@@ -207,12 +255,34 @@ async function fetchChainBalancesAlchemy(
 
 // ── Curated viem fallback ───────────────────────────────────────────────────
 
+/** Per-chain RPC override read from Vite env. Production should set these
+ *  to a paid endpoint (Alchemy, Infura, QuickNode, etc.) — viem's built-in
+ *  defaults are shared public RPCs that get rate-limited at any real
+ *  traffic. Returns undefined when unset, in which case `http()` falls
+ *  back to the chain's default RPC (the prior behaviour). */
+function envRpcUrl(key: ChainKey): string | undefined {
+  // Vite inlines `import.meta.env.VITE_*` at build time; reading from a
+  // dynamically-keyed lookup wouldn't be inlined, so we hardcode the
+  // five var names here.
+  const env = import.meta.env as Record<string, string | undefined>;
+  switch (key) {
+    case 'ethereum': return env.VITE_ETHEREUM_RPC_URL;
+    case 'base':     return env.VITE_BASE_RPC_URL;
+    case 'polygon':  return env.VITE_POLYGON_RPC_URL;
+    case 'arbitrum': return env.VITE_ARBITRUM_RPC_URL;
+    case 'optimism': return env.VITE_OPTIMISM_RPC_URL;
+  }
+}
+
 // Module-level singleton clients per chain. Cast to PublicClient because
 // viem's per-chain narrow client types reject being passed to a single helper.
 const VIEM_CLIENTS: Record<ChainKey, PublicClient> = Object.fromEntries(
   CHAIN_CONFIGS.map(cfg => [
     cfg.key,
-    createPublicClient({ chain: cfg.viemChain, transport: http() }) as PublicClient,
+    createPublicClient({
+      chain:     cfg.viemChain,
+      transport: http(envRpcUrl(cfg.key)),  // env override, falls back to viem's chain default
+    }) as PublicClient,
   ]),
 ) as Record<ChainKey, PublicClient>;
 
@@ -268,12 +338,9 @@ export interface SnapshotResult {
   chainErrors:   string[];
 }
 
-/** Fetches a full multi-chain snapshot for an address. Picks the Alchemy
- *  "all tokens" path when a key is present, otherwise falls back to the
- *  curated list via viem. Each chain's fetch is independent — one chain
- *  failing never blocks the others. Failures are recorded in the returned
- *  `chainErrors` so the UI can distinguish "no balances" from "unavailable". */
-export async function fetchSnapshotData(address: `0x${string}`): Promise<SnapshotResult> {
+/** Single pass through every chain — the actual RPC work. Always resolves;
+ *  per-chain errors are caught and reported via the returned chainErrors. */
+async function runSnapshotPass(address: `0x${string}`): Promise<SnapshotResult> {
   const chainBalances: Record<string, Balance[]> = {};
   const chainErrors:   string[]                   = [];
 
@@ -293,6 +360,49 @@ export async function fetchSnapshotData(address: `0x${string}`): Promise<Snapsho
   );
 
   return { chainBalances, chainErrors };
+}
+
+/** Fetches a full multi-chain snapshot for an address. Picks the Alchemy
+ *  "all tokens" path when a key is present, otherwise falls back to the
+ *  curated list via viem. Each chain's fetch is independent — one chain
+ *  failing never blocks the others. Failures are recorded in the returned
+ *  `chainErrors` so the UI can distinguish "no balances" from "unavailable".
+ *
+ *  Retry policy: if EVERY configured chain fails on the first attempt, we
+ *  wait 3 seconds and run a second pass. Most "all chains failed" outcomes
+ *  are caused by a momentary rate-limit burst (KnownWalletsPanel scans many
+ *  wallets in parallel — Alchemy free tier hits its ceiling), and a single
+ *  short backoff almost always clears the wave. If the retry partially
+ *  succeeds, that result is returned. If it also fully fails, we persist
+ *  the all-Unavailable result so the user sees the failure clearly rather
+ *  than perpetually stale data. */
+const ALL_FAILED_RETRY_DELAY_MS = 3_000;
+
+export async function fetchSnapshotData(address: `0x${string}`): Promise<SnapshotResult> {
+  const first = await runSnapshotPass(address);
+
+  if (first.chainErrors.length < CHAIN_CONFIGS.length) {
+    return first;
+  }
+
+  // Every chain failed — retry once after a short delay.
+  console.warn(
+    `[WalletSnapshot] All ${CHAIN_CONFIGS.length} chains failed on first pass for ${address}. ` +
+    `Retrying in ${ALL_FAILED_RETRY_DELAY_MS}ms…`,
+  );
+  await new Promise(resolve => setTimeout(resolve, ALL_FAILED_RETRY_DELAY_MS));
+  const second = await runSnapshotPass(address);
+
+  if (second.chainErrors.length < CHAIN_CONFIGS.length) {
+    const recovered = CHAIN_CONFIGS.length - second.chainErrors.length;
+    console.log(
+      `[WalletSnapshot] Retry succeeded for ${address} — ${recovered}/${CHAIN_CONFIGS.length} chains recovered.`,
+    );
+  } else {
+    console.warn(`[WalletSnapshot] Retry also failed for ${address}; persisting all-Unavailable.`);
+  }
+
+  return second;
 }
 
 // ── Utilities ───────────────────────────────────────────────────────────────
