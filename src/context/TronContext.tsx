@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 // NB: `tronweb` is a heavy lib (~230 KB gzipped). We deliberately do NOT
 // import it statically — every API surface we need is on the injected
@@ -155,6 +155,14 @@ export function TronProvider({ children }: ProviderProps) {
   const [address,   setAddress]   = useState<string | null>(null);
   const [chainId,   setChainId]   = useState<number | null>(null);
 
+  // Track whether we've issued the eager `tron_requestAccounts` for this
+  // page lifecycle. Without this guard, the polling loop would re-fire
+  // the request every tick that runs before defaultAddress.base58 lands —
+  // each call past the first is a no-op for TronLink, but it pollutes the
+  // console with "in queue (4000)" responses and triggers the warning the
+  // browser surfaces about repeated requests.
+  const requestedAccountsRef = useRef(false);
+
   // Read tronWeb state into React state. Idempotent — safe to call any
   // time. Returns the snapshot it just installed so callers can chain.
   const refreshFromTronWeb = useCallback(() => {
@@ -175,25 +183,69 @@ export function TronProvider({ children }: ProviderProps) {
     setChainId(chainIdFromHost(tw.fullNode?.host));
   }, []);
 
-  // Detect TronLink injection AND the post-injection ready handshake.
-  // Two distinct things that happen on TronLink's own schedule:
+  /**
+   * Fire `tron_requestAccounts` once. TronLink only injects a complete
+   * `defaultAddress.base58` after a dapp has called this — if we just
+   * read window.tronWeb passively, we get `installed=true, address=null`
+   * forever. (TronLink's own console warning explicitly tells dapp devs
+   * to call it "at the earliest time possible.")
+   *
+   * Behaviour matrix:
+   *   - User has previously approved this origin → returns 200 silently,
+   *     no popup, defaultAddress populates within ms.
+   *   - User has NOT approved yet                → TronLink shows its
+   *     connection-approval popup. Approve → 200; Reject → 4001.
+   *   - User locked the extension                → 4000 ("in queue").
+   *
+   * The `silent` flag suppresses thrown errors when called eagerly from
+   * the polling loop — we only want connect()'s explicit user action to
+   * surface a thrown rejection.
+   */
+  const requestAccounts = useCallback(async (silent: boolean): Promise<void> => {
+    if (!window.tronLink?.request) return;
+    try {
+      const res = await window.tronLink.request({ method: 'tron_requestAccounts' });
+      // 200 = approved (now or previously). Anything else means we're
+      // not authorised — leave React state in the disconnected branch.
+      if (res?.code === 200) {
+        refreshFromTronWeb();
+      } else if (!silent) {
+        throw new Error(res?.message ?? 'TronLink rejected the connection request');
+      }
+    } catch (err) {
+      if (!silent) throw err;
+      // Eager call: rejection is fine, just means the user said no.
+      // Don't spam the console — TronLink already logged the rejection.
+    }
+  }, [refreshFromTronWeb]);
+
+  // Detect TronLink injection AND drive the request-accounts handshake.
   //
-  //   1. The extension sets `window.tronWeb` (typically <100 ms after
-  //      DOMContentLoaded, but can be later under load).
-  //   2. TronLink's content script then completes a `ready` / `setNode`
-  //      handshake and populates `tw.defaultAddress.base58`. This is what
-  //      we actually care about — until it lands, `tw.ready` may be true
-  //      while `defaultAddress.base58` is still ''.
+  // Three things that happen on TronLink's own schedule:
   //
-  // The earlier version of this loop stopped polling the moment (1)
-  // happened, which raced with (2): if defaultAddress.base58 wasn't
-  // populated *during* the same tick, we read `installed=true,
-  // address=null` once and never re-checked. The user saw "Connect
-  // TronLink" forever even though the wallet was actually connected.
+  //   1. The extension sets `window.tronWeb` and `window.tronLink`
+  //      (typically <100 ms after DOMContentLoaded, but can be later
+  //      under load).
+  //   2. The dapp must call `tronLink.request({method: 'tron_requestAccounts'})`
+  //      to authorize the origin. Without this call, TronLink leaves
+  //      `defaultAddress.base58` empty forever — even if the wallet is
+  //      unlocked and previously connected to other dapps. (TronLink's
+  //      own console warning tells devs to call this "at the earliest
+  //      time possible".)
+  //   3. After approval, TronLink completes a `ready` / `setNode`
+  //      handshake that populates `defaultAddress.base58`. This is the
+  //      moment our UI flips to connected.
   //
-  // Fix: keep polling until we see an address (or the attempt cap fires),
-  // not just until `window.tronWeb` exists. Cheap — one property read
-  // every 250 ms for at most ~15 s on cold start.
+  // The earlier version of this loop only did (3) — passively reading
+  // tronWeb — and stopped polling the moment `window.tronWeb` appeared.
+  // That captured `installed=true, address=null` once and stuck there
+  // forever, because (2) never happened on its own.
+  //
+  // Fix: as soon as `window.tronLink` is available, fire the eager
+  // request once (silent — rejection is treated as "user said no", not
+  // an error). Then keep polling until we see an address, or the
+  // attempt cap fires. Cheap — one property read every 250 ms for at
+  // most ~15 s on cold start.
   useEffect(() => {
     let cancelled = false;
     let attempts  = 0;
@@ -202,6 +254,18 @@ export function TronProvider({ children }: ProviderProps) {
     const tick = () => {
       if (cancelled) return;
       refreshFromTronWeb();
+
+      // Fire the eager request once tronLink is available. This is what
+      // actually makes TronLink populate defaultAddress.base58. Guarded
+      // by ref so we don't spam the request on every tick.
+      if (window.tronLink?.request && !requestedAccountsRef.current) {
+        requestedAccountsRef.current = true;
+        // Run in the background — don't await inside the tick. The
+        // refreshFromTronWeb call inside requestAccounts (on success)
+        // will pick up the new address; subsequent ticks here will too.
+        void requestAccounts(true);
+      }
+
       const haveAddress = !!window.tronWeb?.defaultAddress?.base58;
       if (!haveAddress && attempts < MAX_ATTEMPTS) {
         attempts++;
@@ -228,7 +292,7 @@ export function TronProvider({ children }: ProviderProps) {
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onFocus);
     };
-  }, [refreshFromTronWeb]);
+  }, [refreshFromTronWeb, requestAccounts]);
 
   // Subscribe to TronLink's postMessage stream — account/network changes.
   useEffect(() => {
@@ -260,17 +324,16 @@ export function TronProvider({ children }: ProviderProps) {
       // No way to request access — extension not installed.
       throw new Error('TronLink is not installed. Visit https://www.tronlink.org/ to install it.');
     }
-    if (window.tronLink?.request) {
-      // Modern flow: explicitly request account access. TronLink shows its
-      // approval popup if not already granted.
-      const res = await window.tronLink.request({ method: 'tron_requestAccounts' });
-      if (res?.code !== 200) {
-        throw new Error(res?.message ?? 'TronLink rejected the connection request');
-      }
-    }
-    // Either way, refresh state from window.tronWeb.
+    // Mark the eager-request guard so the polling loop doesn't
+    // duplicate the call we're about to make. Use silent=false so a
+    // user-rejection here surfaces as a thrown error the button can
+    // display, unlike the eager mount-time request which swallows it.
+    requestedAccountsRef.current = true;
+    await requestAccounts(false);
+    // requestAccounts already refreshes on success, but call again so
+    // the manual flow stays symmetric with the older code paths.
     refreshFromTronWeb();
-  }, [refreshFromTronWeb]);
+  }, [refreshFromTronWeb, requestAccounts]);
 
   const disconnect = useCallback(() => {
     // TronLink doesn't expose a programmatic disconnect — we just clear

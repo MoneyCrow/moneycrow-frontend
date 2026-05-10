@@ -180,6 +180,16 @@ export default function DepositForm() {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
         <SharpPageHeader title="Create Escrow" subtitle="Lock funds and set terms for a trustless transaction." />
+
+        {/* TronLink banner is surfaced even when no EVM wallet is
+            connected. A TRON-only user (TronLink installed, no MetaMask)
+            previously saw nothing about TRON support on this page —
+            now they see the same Connect / Ready / Coming-soon row that
+            EVM-connected users see. EVM-only visitors still see the
+            "Connect wallet" prompt; TronStatusBanner renders nothing
+            for users without TronLink so they're unaffected. */}
+        <TronStatusBanner variant="deposit" />
+
         <SharpCard style={{ padding: '32px' }}>
           <p style={{ fontSize: 14, fontWeight: 700, color: isDark ? '#FFFFFF' : '#111111', marginBottom: 12 }}>Trustless escrow. No middleman. No custody.</p>
           <p style={{ fontSize: 14, color: textSecondary, lineHeight: 1.75, marginBottom: 20, maxWidth: 520 }}>
@@ -201,7 +211,7 @@ export default function DepositForm() {
           </div>
         </SharpCard>
         <SharpCard>
-          <div className="not-connected">Connect wallet to create a deposit</div>
+          <div className="not-connected">Connect an EVM wallet (Base / Polygon) to create a deposit</div>
         </SharpCard>
       </div>
     );
