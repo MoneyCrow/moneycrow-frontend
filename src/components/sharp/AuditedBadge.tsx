@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTheme } from '../../context/ThemeContext';
 import { ESCROW_ADDRESS } from '../../contracts/Escrow';
+import { TRON_ESCROW_ADDRESS } from '../../contracts/EscrowTron';
+import { TRON_SHASTA_CHAIN_ID, TRON_MAINNET_CHAIN_ID } from '../../context/TronContext';
 
 /**
  * AUDITED badge with a clickable dropdown of contract links.
@@ -16,8 +18,12 @@ import { ESCROW_ADDRESS } from '../../contracts/Escrow';
  */
 
 const SCAN_URL = {
-  base:    'https://basescan.org/address',
-  polygon: 'https://polygonscan.com/address',
+  base:           'https://basescan.org/address',
+  polygon:        'https://polygonscan.com/address',
+  // TRON has separate explorers per network. Both link to the contract's
+  // page (the Tronscan UI lives at fragment paths under #/contract/...).
+  tronShasta:     'https://shasta.tronscan.org/#/contract',
+  tronMainnet:    'https://tronscan.org/#/contract',
 } as const;
 
 export function AuditedBadge() {
@@ -45,8 +51,10 @@ export function AuditedBadge() {
     };
   }, [open]);
 
-  const baseAddr    = ESCROW_ADDRESS[8453];
-  const polygonAddr = ESCROW_ADDRESS[137];
+  const baseAddr        = ESCROW_ADDRESS[8453];
+  const polygonAddr     = ESCROW_ADDRESS[137];
+  const tronShastaAddr  = TRON_ESCROW_ADDRESS[TRON_SHASTA_CHAIN_ID];
+  const tronMainnetAddr = TRON_ESCROW_ADDRESS[TRON_MAINNET_CHAIN_ID];
 
   const dropdownBg = isDark ? '#111111' : '#FFFFFF';
   const border     = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.14)';
@@ -126,11 +134,15 @@ export function AuditedBadge() {
           </div>
 
           {[
-            { chain: 'Base',    addr: baseAddr,    explorer: SCAN_URL.base,    chip: { fg: '#4F8EFF', bg: 'rgba(0,82,255,0.10)',  bd: 'rgba(79,142,255,0.25)' } },
-            { chain: 'Polygon', addr: polygonAddr, explorer: SCAN_URL.polygon, chip: { fg: '#A855F7', bg: 'rgba(130,71,229,0.10)', bd: 'rgba(168,85,247,0.25)' } },
-          ].map(row => row.addr ? (
+            { chain: 'Base',    addr: baseAddr,        explorer: SCAN_URL.base,         testnet: false, chip: { fg: '#4F8EFF', bg: 'rgba(0,82,255,0.10)',  bd: 'rgba(79,142,255,0.25)' } },
+            { chain: 'Polygon', addr: polygonAddr,     explorer: SCAN_URL.polygon,      testnet: false, chip: { fg: '#A855F7', bg: 'rgba(130,71,229,0.10)', bd: 'rgba(168,85,247,0.25)' } },
+            // TRON mainnet is hidden until deployed (addr is empty, the row
+            // bails below). Shasta runs as a testnet entry meanwhile.
+            { chain: 'TRON',    addr: tronMainnetAddr, explorer: SCAN_URL.tronMainnet,  testnet: false, chip: { fg: '#EF0027', bg: 'rgba(239,0,39,0.10)',   bd: 'rgba(239,0,39,0.25)'  } },
+            { chain: 'TRON',    addr: tronShastaAddr,  explorer: SCAN_URL.tronShasta,   testnet: true,  chip: { fg: '#EF0027', bg: 'rgba(239,0,39,0.10)',   bd: 'rgba(239,0,39,0.25)'  } },
+          ].map((row, idx) => row.addr ? (
             <a
-              key={row.chain}
+              key={`${row.chain}-${row.testnet ? 'testnet' : 'mainnet'}-${idx}`}
               href={`${row.explorer}/${row.addr}`}
               target="_blank"
               rel="noopener noreferrer"
@@ -153,6 +165,16 @@ export function AuditedBadge() {
                 padding: '3px 7px', border: `1px solid ${row.chip.bd}`,
                 flexShrink: 0,
               }}>{row.chain}</span>
+              {row.testnet && (
+                <span style={{
+                  background: 'transparent',
+                  color: textSecondary,
+                  fontSize: 9, fontWeight: 700, letterSpacing: '0.10em', textTransform: 'uppercase',
+                  padding: '2px 6px',
+                  border: `1px solid ${border}`,
+                  flexShrink: 0,
+                }}>Testnet</span>
+              )}
               <code style={{
                 fontFamily: 'monospace', fontSize: 11, color: textSecondary,
                 flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',

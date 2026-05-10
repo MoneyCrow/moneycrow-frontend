@@ -11,9 +11,11 @@ import { TronWalletButton } from './TronWalletButton';
  * never sees it. Once installed, shows the wallet connect button plus
  * a one-line readiness statement:
  *
- *   - Not connected     → "Connect to enable TRON support."
+ *   - Not connected     → "Connect TronLink to enable TRON <verb>."
  *   - Connected, ready  → "Ready on <network>." (deposit/accept enabled)
- *   - Connected, gated  → "TRON contract not deployed yet — coming soon."
+ *   - Connected, gated  → "TRON is live on Shasta testnet. Mainnet
+ *     support coming soon." (typically when the user is on TRON mainnet
+ *     and the production Escrow hasn't deployed there yet)
  *
  * Variant prop controls the verbiage:
  *   - 'deposit' → "deposit" wording
@@ -40,11 +42,11 @@ export function TronStatusBanner({ variant = 'deposit' }: Props) {
   } else if (ready) {
     const networkLabel =
       tron.network === 'mainnet' ? 'TRON mainnet' :
-      tron.network === 'shasta'  ? 'TRON Shasta'  :
+      tron.network === 'shasta'  ? 'TRON Shasta testnet'  :
       'an unknown TRON network';
     statusLine = `Ready on ${networkLabel}.`;
   } else {
-    statusLine = `TRON ${verb} are coming soon — contract not yet deployed on this network.`;
+    statusLine = 'TRON is live on Shasta testnet. Mainnet support coming soon.';
   }
 
   const border  = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)';
