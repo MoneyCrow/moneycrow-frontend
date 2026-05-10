@@ -17,8 +17,8 @@ import { TRON_MAINNET_CHAIN_ID, TRON_SHASTA_CHAIN_ID } from '../context/TronCont
 /** Demo contract address (base58 `T…`) per TRON chainId.
  *  Empty string means "not deployed on this network yet". */
 export const TRON_DEMO_ADDRESS: Record<number, string> = {
-  [TRON_MAINNET_CHAIN_ID]: '',                              // mainnet — not yet deployed
-  [TRON_SHASTA_CHAIN_ID]:  '',                              // Shasta — fill after Phase 4 deploy
+  [TRON_MAINNET_CHAIN_ID]: '',                                  // mainnet — not yet deployed
+  [TRON_SHASTA_CHAIN_ID]:  'TM1LmXNjZjDGmEGVNK6cQXBuVBmtzLs4ze', // Shasta — Phase 4 deploy
 };
 
 /** Returns the demo contract address for `chainId`, or undefined when the
