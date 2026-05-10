@@ -175,23 +175,59 @@ export function TronProvider({ children }: ProviderProps) {
     setChainId(chainIdFromHost(tw.fullNode?.host));
   }, []);
 
-  // Detect TronLink injection. The extension sets window.tronWeb on its
-  // own schedule, often after our initial render — poll briefly.
+  // Detect TronLink injection AND the post-injection ready handshake.
+  // Two distinct things that happen on TronLink's own schedule:
+  //
+  //   1. The extension sets `window.tronWeb` (typically <100 ms after
+  //      DOMContentLoaded, but can be later under load).
+  //   2. TronLink's content script then completes a `ready` / `setNode`
+  //      handshake and populates `tw.defaultAddress.base58`. This is what
+  //      we actually care about — until it lands, `tw.ready` may be true
+  //      while `defaultAddress.base58` is still ''.
+  //
+  // The earlier version of this loop stopped polling the moment (1)
+  // happened, which raced with (2): if defaultAddress.base58 wasn't
+  // populated *during* the same tick, we read `installed=true,
+  // address=null` once and never re-checked. The user saw "Connect
+  // TronLink" forever even though the wallet was actually connected.
+  //
+  // Fix: keep polling until we see an address (or the attempt cap fires),
+  // not just until `window.tronWeb` exists. Cheap — one property read
+  // every 250 ms for at most ~15 s on cold start.
   useEffect(() => {
     let cancelled = false;
-    let attempts = 0;
+    let attempts  = 0;
+    const MAX_ATTEMPTS = 60; // ~15 s of polling on first load
 
     const tick = () => {
       if (cancelled) return;
       refreshFromTronWeb();
-      if (!window.tronWeb && attempts < 40) {
+      const haveAddress = !!window.tronWeb?.defaultAddress?.base58;
+      if (!haveAddress && attempts < MAX_ATTEMPTS) {
         attempts++;
-        setTimeout(tick, 250); // ~10s of polling on first load
+        setTimeout(tick, 250);
       }
     };
     tick();
 
-    return () => { cancelled = true; };
+    // Re-check whenever the tab regains focus / visibility. Covers the
+    // common flow: user opens TronLink, approves the connection in the
+    // popup, switches back to our tab — the postMessage may have already
+    // fired before we mounted (or been swallowed by the extension's
+    // background page), but the moment they look at our tab again we
+    // re-pull from window.tronWeb and the UI flips to connected.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshFromTronWeb();
+    };
+    const onFocus = () => refreshFromTronWeb();
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onFocus);
+    };
   }, [refreshFromTronWeb]);
 
   // Subscribe to TronLink's postMessage stream — account/network changes.
