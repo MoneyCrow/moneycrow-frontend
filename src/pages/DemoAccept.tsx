@@ -9,6 +9,7 @@ import { SharpCard } from '../components/sharp/SharpCard';
 import { SharpInput } from '../components/sharp/SharpInput';
 import { SharpPageHeader } from '../components/sharp/SharpPageHeader';
 import { WalletSnapshot } from '../components/sharp/WalletSnapshot';
+import { TronDemoAcceptPanel } from '../components/sharp/TronDemoAcceptPanel';
 import { useTheme } from '../context/ThemeContext';
 
 const ETH_ZERO = '0x0000000000000000000000000000000000000000';
@@ -46,7 +47,11 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
   const [demoDescription, setDemoDescription] = useState('');
   const [verifyToken, setVerifyToken]       = useState('');
 
-  const isValidAddr = (a: string) => a.length === 42 && a.startsWith('0x');
+  const isValidAddr      = (a: string) => a.length === 42 && a.startsWith('0x');
+  const isValidTronAddr  = (a: string) => a.length === 34 && a.startsWith('T');
+  // Either an EVM 0x address or a TRON T address counts as "looks like a depositor".
+  const isAcceptableAddr = (a: string) => isValidAddr(a) || isValidTronAddr(a);
+  const isTronDepositor  = isValidTronAddr(queryAddr);
 
   useEffect(() => {
     if (initialDepositor) {
@@ -141,6 +146,42 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
   const labelStyle: React.CSSProperties = { width: 130, flexShrink: 0, padding: '10px 14px', fontSize: 12, fontWeight: 600, color: textTertiary, textTransform: 'uppercase', letterSpacing: '0.06em', borderRight: `1px solid ${border}` };
   const valueStyle: React.CSSProperties = { flex: 1, padding: '10px 14px', fontSize: 13, color: isDark ? '#FFFFFF' : '#111111', wordBreak: 'break-all' };
 
+  // TRON depositor — route to the TronLink-driven panel BEFORE the EVM
+  // bails below. A user who pastes a T-address from a TRON-side invitation
+  // email shouldn't be told "switch to Base or Polygon"; they should be
+  // told "connect TronLink" (which the panel handles internally).
+  if (isTronDepositor) {
+    return (
+      <div>
+        <SharpPageHeader title="Demo Accept" subtitle="Sign demo acceptance to simulate the escrow flow." />
+
+        <SharpCard style={{ padding: '28px 32px', marginBottom: 16 }}>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <SharpInput
+                label="Depositor Address"
+                id="demoDepositorAddrTron"
+                placeholder="0x… or T… (paste from your invitation email)"
+                value={depositorInput}
+                onChange={e => { setDepositorInput(e.target.value); setSig(null); resetTx(); }}
+                onKeyDown={e => e.key === 'Enter' && isAcceptableAddr(depositorInput) && setQueryAddr(depositorInput)}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+              <SharpButton size="sm"
+                onClick={() => { setQueryAddr(depositorInput); setSig(null); resetTx(); }}
+                disabled={!isAcceptableAddr(depositorInput)}>
+                Query
+              </SharpButton>
+            </div>
+          </div>
+        </SharpCard>
+
+        <TronDemoAcceptPanel depositorBase58={queryAddr} />
+      </div>
+    );
+  }
+
   if (!isConnected) {
     return (
       <div>
@@ -175,15 +216,15 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
               <SharpInput
                 label="Depositor Address"
                 id="demoDepositorAddr"
-                placeholder="0x... (paste from your invitation email)"
+                placeholder="0x… or T… (paste from your invitation email)"
                 value={depositorInput}
                 onChange={e => { setDepositorInput(e.target.value); setSig(null); resetTx(); }}
-                onKeyDown={e => e.key === 'Enter' && isValidAddr(depositorInput) && setQueryAddr(depositorInput)}
+                onKeyDown={e => e.key === 'Enter' && isAcceptableAddr(depositorInput) && setQueryAddr(depositorInput)}
               />
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-end' }}>
               <SharpButton size="sm" onClick={() => { setQueryAddr(depositorInput); setSig(null); resetTx(); }}
-                disabled={!isValidAddr(depositorInput)}>
+                disabled={!isAcceptableAddr(depositorInput)}>
                 Query
               </SharpButton>
             </div>
