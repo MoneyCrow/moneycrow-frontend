@@ -224,6 +224,27 @@ function isLikelySpam(symbol: string, name: string | null | undefined): boolean 
   return false;
 }
 
+/**
+ * Dust threshold: a token balance is "dust" if its human-readable value is
+ * below 0.0001. Done with pure BigInt arithmetic to avoid Number precision
+ * loss — for an 18-decimal token, the threshold is 10^(18-4) = 10^14 raw
+ * units, which a Number would round once it exceeds 2^53.
+ *
+ *   raw < 10^(decimals - 4)   ⟺   formattedValue < 0.0001
+ *
+ * Tokens with fewer than 4 decimals can't represent 0.0001 at all (a
+ * 2-decimal token's smallest unit IS 0.01), so the threshold is bypassed —
+ * any non-zero balance shows. The zero case (raw === 0n) returns true so
+ * this can stand alone as a "skip this row" check even though upstream
+ * already filters zero balances.
+ */
+function isDust(raw: bigint, decimals: number): boolean {
+  if (raw <= 0n) return true;
+  if (decimals < 4) return false;
+  const threshold = 10n ** BigInt(decimals - 4);
+  return raw < threshold;
+}
+
 interface AlchemyTokenBalance  { contractAddress: string; tokenBalance: string }
 interface AlchemyMetadata      { decimals: number | null; name: string | null; symbol: string | null }
 interface AlchemyTokenBalances { tokenBalances: AlchemyTokenBalance[] }
@@ -293,6 +314,12 @@ async function fetchChainBalancesAlchemy(
     if (isLikelySpam(meta.symbol, meta.name)) return;
     try {
       const raw = BigInt(nonZero[i].tokenBalance);
+      // Drop dust (< 0.0001 units). The Alchemy "all tokens" API surfaces
+      // every contract that ever touched the wallet, including farming
+      // shrapnel like 0.00000003 of some LP token. Showing those rows
+      // makes meaningful balances impossible to spot. The check is pure
+      // BigInt so 18-decimal tokens stay precise.
+      if (isDust(raw, meta.decimals)) return;
       out.push({ symbol: meta.symbol, amount: formatUnits(raw, meta.decimals) });
     } catch { /* skip malformed balance */ }
   });
