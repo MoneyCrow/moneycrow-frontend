@@ -108,13 +108,48 @@ const CHAIN_CONFIGS: ChainConfig[] = [
 
 const ALCHEMY_KEY: string = (import.meta.env.VITE_ALCHEMY_API_KEY as string | undefined) ?? '';
 
+// Diagnostic: surface the key state at module load so a missing or
+// truncated key is obvious in the console before any fetch runs.
+// Never log the key itself — only its length and the first/last 4 chars,
+// which is enough to tell "missing", "wrong key entirely", and "the
+// right key was loaded" apart at a glance without leaking the secret.
+//
+// If you're staring at "Unavailable" on every chain:
+//   - length=0 / "MISSING"        → VITE_ALCHEMY_API_KEY isn't set in
+//                                   the deployed env (Vercel project
+//                                   settings → Environment Variables).
+//   - length=32 but every chain   → key is loaded but some/all of the
+//     returns 403                   chains aren't enabled in the
+//                                   Alchemy app this key belongs to.
+//                                   Fix at https://dashboard.alchemy.com
+//                                   → your app → Networks tab.
+//   - length=32, one chain works  → that chain is enabled, others are
+//                                   not. Same fix.
+if (typeof window !== 'undefined') {
+  if (ALCHEMY_KEY) {
+    const tail = ALCHEMY_KEY.length > 8 ? `${ALCHEMY_KEY.slice(0, 4)}…${ALCHEMY_KEY.slice(-4)}` : '(short)';
+    console.log(`[WalletSnapshot] Alchemy key loaded — length=${ALCHEMY_KEY.length}, fingerprint=${tail}`);
+  } else {
+    console.warn('[WalletSnapshot] VITE_ALCHEMY_API_KEY is MISSING — falling back to curated viem reads. Add it in Vercel env vars and redeploy to enable the full all-tokens snapshot.');
+  }
+}
+
 interface RpcResponse<T> { result?: T; error?: { message: string } }
 
 /** Sentinel thrown by alchemyCall on transport / 4xx / 5xx failure so the
  *  caller can record a per-chain error instead of silently treating it as
  *  "no balances". The message is opportunistically pulled from the response
- *  body when available — Alchemy's 403s carry an explanation. */
-class AlchemyError extends Error {}
+ *  body when available — Alchemy's 403s carry an explanation. The optional
+ *  `status` field carries the HTTP status code (0 for network errors)
+ *  so chain-level handlers can flag config errors (401 = wrong key, 403 =
+ *  chain not enabled, 429 = rate-limited) without re-parsing the message. */
+class AlchemyError extends Error {
+  status: number;
+  constructor(message: string, status = 0) {
+    super(message);
+    this.status = status;
+  }
+}
 
 /** Retry policy for transient Alchemy failures. KnownWalletsPanel scans
  *  multiple addresses × 5 chains in parallel and bursts past the free-tier
@@ -152,17 +187,28 @@ async function alchemyCall<T>(url: string, method: string, params: unknown[]): P
         const text = await res.text();
         if (text) detail = `HTTP ${res.status} — ${text.slice(0, 240)}`;
       } catch { /* ignore */ }
-      throw new AlchemyError(detail);
+      throw new AlchemyError(detail, res.status);
     }
 
     let body: RpcResponse<T>;
     try { body = await res.json() as RpcResponse<T>; }
-    catch { throw new AlchemyError('non-JSON response'); }
-    if (body.error) throw new AlchemyError(body.error.message ?? 'rpc error');
+    catch { throw new AlchemyError('non-JSON response', res.status); }
+    if (body.error) throw new AlchemyError(body.error.message ?? 'rpc error', res.status);
     return body.result ?? null;
   }
   // Loop above either returns or throws — this is just for TS exhaustiveness.
   throw new AlchemyError('alchemyCall: retries exhausted');
+}
+
+/** Common-failure-mode hint string for a 4xx HTTP code. Surfaces the most
+ *  likely root cause inline in the console error so the user doesn't have
+ *  to translate "HTTP 403" into a fix. */
+function alchemyStatusHint(status: number): string {
+  if (status === 401) return ' [hint: wrong API key — check VITE_ALCHEMY_API_KEY value]';
+  if (status === 403) return ' [hint: chain not enabled for this Alchemy app — open dashboard.alchemy.com → your app → Networks and tick this chain]';
+  if (status === 404) return ' [hint: wrong subdomain or path — Alchemy may have moved this endpoint]';
+  if (status === 429) return ' [hint: rate-limited — free tier 25 req/s ceiling]';
+  return '';
 }
 
 /** Heuristic to drop airdrop/dust spam tokens from the visible list.
@@ -186,6 +232,7 @@ async function fetchChainBalancesAlchemy(
   url:          string,
   address:      `0x${string}`,
   nativeSymbol: string,
+  chainLabel:   string,   // for diagnostic logs — "Base", "Polygon", etc.
 ): Promise<Balance[]> {
   // Promise.allSettled rather than Promise.all — if one of the two top-level
   // calls succeeds and the other gets rate-limited, we'd rather show
@@ -206,12 +253,12 @@ async function fetchChainBalancesAlchemy(
   // Log per-call failures so partial-degradation is visible in the console
   // — otherwise it just looks like the wallet has fewer tokens than expected.
   if (nativeRes.status === 'rejected') {
-    console.warn(`[WalletSnapshot] eth_getBalance failed for ${address}; continuing with token balances only:`,
-      nativeRes.reason instanceof Error ? nativeRes.reason.message : nativeRes.reason);
+    const reason = nativeRes.reason instanceof Error ? nativeRes.reason.message : String(nativeRes.reason);
+    console.warn(`[WalletSnapshot] [${chainLabel}] eth_getBalance failed for ${address}; continuing with token balances only: ${reason}`);
   }
   if (tokensRes.status === 'rejected') {
-    console.warn(`[WalletSnapshot] alchemy_getTokenBalances failed for ${address}; continuing with native only:`,
-      tokensRes.reason instanceof Error ? tokensRes.reason.message : tokensRes.reason);
+    const reason = tokensRes.reason instanceof Error ? tokensRes.reason.message : String(tokensRes.reason);
+    console.warn(`[WalletSnapshot] [${chainLabel}] alchemy_getTokenBalances failed for ${address}; continuing with native only: ${reason}`);
   }
 
   const native = nativeRes.status === 'fulfilled' ? nativeRes.value : null;
@@ -346,14 +393,27 @@ async function runSnapshotPass(address: `0x${string}`): Promise<SnapshotResult> 
 
   await Promise.all(
     CHAIN_CONFIGS.map(async (cfg) => {
+      // Redacted URL for log lines — shows the subdomain (which is what
+      // tells you which Alchemy endpoint we hit) but hides the key.
+      const redactedUrl = `https://${cfg.alchemySubdomain}.g.alchemy.com/v2/<key>`;
       try {
         const balances = ALCHEMY_KEY
-          ? await fetchChainBalancesAlchemy(`https://${cfg.alchemySubdomain}.g.alchemy.com/v2/${ALCHEMY_KEY}`, address, cfg.nativeSymbol)
+          ? await fetchChainBalancesAlchemy(`https://${cfg.alchemySubdomain}.g.alchemy.com/v2/${ALCHEMY_KEY}`, address, cfg.nativeSymbol, cfg.displayName)
           : await fetchChainBalancesViem(VIEM_CLIENTS[cfg.key], address, cfg.nativeSymbol, cfg.curatedTokens);
         chainBalances[cfg.key] = balances;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[WalletSnapshot] ${cfg.displayName} (${cfg.key}) fetch failed for ${address}: ${msg}`);
+        const msg    = err instanceof Error ? err.message : String(err);
+        const status = err instanceof AlchemyError ? err.status : 0;
+        const hint   = err instanceof AlchemyError ? alchemyStatusHint(err.status) : '';
+        // console.error (not warn) — DevTools surfaces these with a red
+        // marker, which is what you want when "every chain is Unavailable"
+        // is the user-visible symptom.
+        console.error(
+          `[WalletSnapshot] ${cfg.displayName} (${cfg.key}) fetch FAILED for ${address}\n` +
+          `  endpoint: ${redactedUrl}\n` +
+          `  status:   ${status || 'network'}\n` +
+          `  message:  ${msg}${hint}`,
+        );
         chainErrors.push(cfg.key);
       }
     }),
