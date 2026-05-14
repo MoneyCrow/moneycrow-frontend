@@ -232,14 +232,25 @@ function isLikelySpam(symbol: string, name: string | null | undefined): boolean 
  *
  *   raw < 10^(decimals - 4)   ⟺   formattedValue < 0.0001
  *
- * Tokens with fewer than 4 decimals can't represent 0.0001 at all (a
- * 2-decimal token's smallest unit IS 0.01), so the threshold is bypassed —
- * any non-zero balance shows. The zero case (raw === 0n) returns true so
- * this can stand alone as a "skip this row" check even though upstream
- * already filters zero balances.
+ * Two carve-outs:
+ *
+ *   - decimals === 0  → almost always spam airdrops. The current crop
+ *     (BIT, DOG, DOGE, SATO, WAR on Ethereum; BULL, DEUS, OCT, RISE,
+ *     SEC, XNT on Base) all arrive as 1–100 units. Legitimate 0-decimal
+ *     tokens held in meaningful quantity (old governance tokens, NFT-
+ *     adjacent ERC-20s) sit in the thousands or more — a 1000-unit
+ *     threshold filters the spam without clipping the rare real case.
+ *
+ *   - 0 < decimals < 4 → a fractional 0.0001 threshold is unrepresentable
+ *     (a 2-decimal token's smallest unit IS 0.01). Any non-zero balance
+ *     passes through; we don't try to second-guess these.
+ *
+ * The zero case (raw <= 0n) returns true so this can stand alone as a
+ * "skip this row" check even though upstream already filters zero balances.
  */
 function isDust(raw: bigint, decimals: number): boolean {
   if (raw <= 0n) return true;
+  if (decimals === 0) return raw < 1000n;
   if (decimals < 4) return false;
   const threshold = 10n ** BigInt(decimals - 4);
   return raw < threshold;
