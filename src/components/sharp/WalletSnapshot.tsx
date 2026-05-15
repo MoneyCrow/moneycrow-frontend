@@ -232,7 +232,13 @@ function isLikelySpam(symbol: string, name: string | null | undefined): boolean 
  *
  *   raw < 10^(decimals - 4)   ⟺   formattedValue < 0.0001
  *
- * Two carve-outs:
+ * Decimals carve-outs:
+ *
+ *   - decimals === null  → Alchemy returns null for unverified / spam
+ *     contracts that don't expose proper metadata. Treat as 0-decimal so
+ *     the spam-airdrop threshold below applies; if we let null fall
+ *     through to the comparisons, `null < 4` would coerce to `true` and
+ *     leak the token in.
  *
  *   - decimals === 0  → almost always spam airdrops. The current crop
  *     (BIT, DOG, DOGE, SATO, WAR on Ethereum; BULL, DEUS, OCT, RISE,
@@ -248,12 +254,12 @@ function isLikelySpam(symbol: string, name: string | null | undefined): boolean 
  * The zero case (raw <= 0n) returns true so this can stand alone as a
  * "skip this row" check even though upstream already filters zero balances.
  */
-function isDust(raw: bigint, decimals: number): boolean {
+function isDust(raw: bigint, decimals: number | null): boolean {
   if (raw <= 0n) return true;
-  if (decimals === 0) return raw < 1000n;
-  if (decimals < 4) return false;
-  const threshold = 10n ** BigInt(decimals - 4);
-  return raw < threshold;
+  const d = decimals ?? 0;       // null decimals → treat as 0-decimal token
+  if (d === 0) return raw < 1000n;
+  if (d < 4) return false;
+  return raw < 10n ** BigInt(d - 4);
 }
 
 interface AlchemyTokenBalance  { contractAddress: string; tokenBalance: string }
@@ -321,17 +327,30 @@ async function fetchChainBalancesAlchemy(
   metaResults.forEach((res, i) => {
     if (res.status !== 'fulfilled') return;
     const meta = res.value;
-    if (!meta || meta.decimals == null || !meta.symbol) return;
+    // Don't narrow meta.decimals to `number` here — let it stay
+    // `number | null` so isDust can apply its null→0-decimal carve-out.
+    // The earlier `meta.decimals == null` early-return was filtering out
+    // null-decimal tokens BEFORE the dust check, so contracts that
+    // return null decimals plus a tiny raw balance (the spam-airdrop
+    // pattern) were being dropped here for the wrong reason — and
+    // anything that didn't get short-circuited through this branch
+    // (e.g. decimals reported as 0 for the same token from a different
+    // Alchemy endpoint) leaked through.
+    if (!meta || !meta.symbol) return;
     if (isLikelySpam(meta.symbol, meta.name)) return;
     try {
       const raw = BigInt(nonZero[i].tokenBalance);
-      // Drop dust (< 0.0001 units). The Alchemy "all tokens" API surfaces
-      // every contract that ever touched the wallet, including farming
-      // shrapnel like 0.00000003 of some LP token. Showing those rows
-      // makes meaningful balances impossible to spot. The check is pure
-      // BigInt so 18-decimal tokens stay precise.
+      // Drop dust (< 0.0001 units, or < 1000 raw for 0-decimal/null
+      // tokens). The Alchemy "all tokens" API surfaces every contract
+      // that ever touched the wallet, including farming shrapnel and
+      // spam airdrops. The check is pure BigInt so 18-decimal tokens
+      // stay precise.
       if (isDust(raw, meta.decimals)) return;
-      out.push({ symbol: meta.symbol, amount: formatUnits(raw, meta.decimals) });
+      // A null-decimal token that survives isDust must hold ≥ 1000 raw
+      // units — display it as a whole-number balance (0-decimal
+      // semantics), which is correct for the legitimate "old governance
+      // / NFT-adjacent" case the threshold is calibrated to keep.
+      out.push({ symbol: meta.symbol, amount: formatUnits(raw, meta.decimals ?? 0) });
     } catch { /* skip malformed balance */ }
   });
 
