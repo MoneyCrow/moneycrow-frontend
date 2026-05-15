@@ -225,6 +225,57 @@ function isLikelySpam(symbol: string, name: string | null | undefined): boolean 
 }
 
 /**
+ * Per-chain spam-contract blocklist — the last-resort filter for scam
+ * airdrops that survive both isLikelySpam (legit-looking symbol) and
+ * isDust (balance ≥ threshold). These contracts deliberately mint a
+ * "normal-looking" 1-token or 9-token amount with sensible decimals
+ * and 3-letter symbols, so neither heuristic catches them.
+ *
+ * Verified spam against the admin wallet (0xa27bf6b…b013c2d) on Base
+ * mainnet via direct alchemy_getTokenBalances + alchemy_getTokenMetadata
+ * — all six contracts share identical 9-decimal / 9000000000-raw airdrop
+ * payload patterns.
+ *
+ * Ethereum entries pending: the local Alchemy app (hnqoyu44anw87kf6)
+ * has ETH_MAINNET disabled, so this machine can't enumerate the live
+ * spam contracts on Ethereum. Paste the full 0x… addresses below from
+ * either:
+ *   - DevTools network tab on /admin/wallets (look for the eth-mainnet
+ *     alchemy_getTokenBalances response)
+ *   - Or the console snippet at the bottom of WalletSnapshot's diag
+ *     log once ETH_MAINNET is enabled on the Alchemy dashboard.
+ *
+ * Longer-term move: Alchemy Token API v3 exposes an `isSpam` boolean on
+ * contract metadata. This blocklist is the immediate fix; the v3 check
+ * is the durable one (separate commit).
+ *
+ * All entries MUST be lowercase — the .has() check lowercases the
+ * incoming contractAddress at lookup time, so the table itself must
+ * also be lowercase to match.
+ */
+const SPAM_CONTRACTS: Record<string, ReadonlySet<string>> = {
+  // TODO: full Ethereum spam addresses. Captured prefixes (10 hex chars
+  // each) from the live wallet — not callable as exact-match keys until
+  // expanded. Drop the entries below into the Set as `.toLowerCase()`
+  // strings once you have the full 0x-prefixed 40-char hex:
+  //   '0x00e2b6d170…',  // DOG
+  //   '0x05cd843067…',  // DOGE
+  //   '0x180af13118…',  // SATO
+  //   '0x37dabad8ac…',  // DOG (duplicate symbol, different contract)
+  //   '0x4921bb864d…',  // WAR
+  //   '0x6cd62ece64…',  // BIT
+  ethereum: new Set<string>(),
+  base: new Set([
+    '0x0d4d191a72c1d8d6703d6d3ed1a532b67d5a5f14', // SEC
+    '0x1f847ee5247124beeab90f78d759369100cb63d4', // DEUS
+    '0x330eea8ec44e91302c318006ef5b8202adca2d4d', // RISE
+    '0x388890164213378daae16e963381769a33945db8', // XNT
+    '0xa66606cf9c4b64c2664da51d3a382146ac1bfb04', // BULL
+    '0xdc71fc1b65f7e46e58bc1940b901dfc1cf5b8256', // OCT
+  ].map(s => s.toLowerCase())),
+};
+
+/**
  * Dust threshold: a token balance is "dust" if its human-readable value is
  * below 0.0001. Done with pure BigInt arithmetic to avoid Number precision
  * loss — for an 18-decimal token, the threshold is 10^(18-4) = 10^14 raw
@@ -270,7 +321,8 @@ async function fetchChainBalancesAlchemy(
   url:          string,
   address:      `0x${string}`,
   nativeSymbol: string,
-  chainLabel:   string,   // for diagnostic logs — "Base", "Polygon", etc.
+  chainLabel:   string,    // for diagnostic logs — "Base", "Polygon", etc.
+  chainKey:     ChainKey,  // for the per-chain spam-contract blocklist below
 ): Promise<Balance[]> {
   // Promise.allSettled rather than Promise.all — if one of the two top-level
   // calls succeeds and the other gets rate-limited, we'd rather show
@@ -337,6 +389,13 @@ async function fetchChainBalancesAlchemy(
     // (e.g. decimals reported as 0 for the same token from a different
     // Alchemy endpoint) leaked through.
     if (!meta || !meta.symbol) return;
+    // Per-chain spam-contract blocklist. Checked BEFORE the cheaper
+    // string heuristic and balance math because Set.has is O(1) and
+    // these tokens deliberately spoof legitimate-looking metadata to
+    // evade those filters. ?. handles chains that have no blocklist
+    // entry (returns undefined → .has comparison is skipped).
+    const lowerAddr = nonZero[i].contractAddress.toLowerCase();
+    if (SPAM_CONTRACTS[chainKey]?.has(lowerAddr)) return;
     if (isLikelySpam(meta.symbol, meta.name)) return;
     try {
       const raw = BigInt(nonZero[i].tokenBalance);
@@ -455,7 +514,7 @@ async function runSnapshotPass(address: `0x${string}`): Promise<SnapshotResult> 
       const redactedUrl = `https://${cfg.alchemySubdomain}.g.alchemy.com/v2/<key>`;
       try {
         const balances = ALCHEMY_KEY
-          ? await fetchChainBalancesAlchemy(`https://${cfg.alchemySubdomain}.g.alchemy.com/v2/${ALCHEMY_KEY}`, address, cfg.nativeSymbol, cfg.displayName)
+          ? await fetchChainBalancesAlchemy(`https://${cfg.alchemySubdomain}.g.alchemy.com/v2/${ALCHEMY_KEY}`, address, cfg.nativeSymbol, cfg.displayName, cfg.key)
           : await fetchChainBalancesViem(VIEM_CLIENTS[cfg.key], address, cfg.nativeSymbol, cfg.curatedTokens);
         chainBalances[cfg.key] = balances;
       } catch (err) {
