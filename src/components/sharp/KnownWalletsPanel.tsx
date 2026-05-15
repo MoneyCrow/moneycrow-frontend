@@ -38,8 +38,30 @@ const DEPLOY_BLOCK: Record<number, bigint> = {
 
 const CHUNK_SIZE = 10_000n;
 
-const baseClient    = createPublicClient({ chain: base,    transport: http() }) as PublicClient;
-const polygonClient = createPublicClient({ chain: polygon, transport: http() }) as PublicClient;
+// Reuse VITE_ALCHEMY_API_KEY — the same env var WalletSnapshot.tsx reads.
+// One source of truth: if you swap Alchemy keys you only touch one Vercel
+// env var, and the event scanner and snapshot panel can never drift apart.
+//
+// The per-chain Alchemy subdomain follows the exact pattern WalletSnapshot
+// uses (`base-mainnet`, `polygon-mainnet`). Falling through to the per-
+// chain VITE_*_RPC_URL override keeps the older RPC-URL env vars working
+// for any deploy that doesn't have the Alchemy key set yet; if neither is
+// configured the call lands on viem's chain default (rate-limited public
+// RPC) and the user sees the old slow behaviour — which is what they had
+// before this change, so it's a safe fallback.
+const ALCHEMY_KEY = (import.meta.env.VITE_ALCHEMY_API_KEY as string | undefined) ?? '';
+
+function rpcUrlFor(chainKey: 'base' | 'polygon'): string | undefined {
+  if (ALCHEMY_KEY) {
+    const subdomain = chainKey === 'base' ? 'base-mainnet' : 'polygon-mainnet';
+    return `https://${subdomain}.g.alchemy.com/v2/${ALCHEMY_KEY}`;
+  }
+  const env = import.meta.env as Record<string, string | undefined>;
+  return chainKey === 'base' ? env.VITE_BASE_RPC_URL : env.VITE_POLYGON_RPC_URL;
+}
+
+const baseClient    = createPublicClient({ chain: base,    transport: http(rpcUrlFor('base'))    }) as PublicClient;
+const polygonClient = createPublicClient({ chain: polygon, transport: http(rpcUrlFor('polygon')) }) as PublicClient;
 
 interface CachedEntry {
   address:       `0x${string}`;
