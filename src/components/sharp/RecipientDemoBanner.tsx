@@ -62,6 +62,23 @@ const DEPLOY_BLOCK: Record<number, bigint> = {
 const CHUNK_SIZE = 10_000n;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+// 30-day scan window in blocks (Base block time ~2 s → 30d ≈ 1.296M
+// blocks). Polygon's average is slightly faster (~2 s post-Bor) so the
+// same constant covers ~25-30 days there, still well inside the
+// "actively-relevant Pending demo" window.
+//
+// The full-history scan would take ~4 min on Alchemy free tier for a
+// ~15M-block range — too slow for a first-time recipient who has no
+// warm cache yet. The 30-day cap brings cold-start to ~20 s, which
+// the cache-then-refresh pattern below covers visually because cached
+// entries render instantly and the refresh is a no-op when nothing
+// has changed.
+//
+// Older history is the My-Demos tab's job (2.2) — it has its own
+// loading UX and can afford the longer scan when the user actually
+// asks for full history.
+const SCAN_WINDOW_BLOCKS = 1_296_000n;
+
 const ALCHEMY_KEY = (import.meta.env.VITE_ALCHEMY_API_KEY as string | undefined) ?? '';
 
 /** Build an Alchemy-routed viem client for the given chain. Falls through
@@ -207,8 +224,12 @@ async function scanChainForRecipient(
   const demoAddr = getDemoAddress(cfg.chainId);
   if (!demoAddr) return [];
 
-  const fromBlock = DEPLOY_BLOCK[cfg.chainId] ?? 0n;
-  const toBlock   = await cfg.client.getBlockNumber();
+  const deployBlock = DEPLOY_BLOCK[cfg.chainId] ?? 0n;
+  const toBlock     = await cfg.client.getBlockNumber();
+  // 30-day window, clamped at deploy block so brand-new contracts (or
+  // freshly-deployed chains) don't underflow into negative ranges.
+  const windowStart = toBlock > SCAN_WINDOW_BLOCKS ? toBlock - SCAN_WINDOW_BLOCKS : 0n;
+  const fromBlock   = windowStart > deployBlock ? windowStart : deployBlock;
 
   // Collect DemoCreated logs in chunks. Per-chunk failure isn't fatal —
   // we'd rather show partial results than mark the whole chain blocked.
