@@ -3,6 +3,7 @@ import { useAccount, useReadContract } from 'wagmi';
 import { ThemeProvider } from './context/ThemeContext';
 import { AppShell } from './components/sharp/AppShell';
 import { WalletConnectTracker } from './components/sharp/WalletConnectTracker';
+import { RecipientDemoBanner } from './components/sharp/RecipientDemoBanner';
 import Landing        from './pages/Landing';
 import DepositForm    from './pages/DepositForm';
 import EscrowStatus   from './pages/EscrowStatus';
@@ -68,6 +69,12 @@ function AppInner() {
           Known Wallets panel sees connect-only users (not just on-chain
           depositors/recipients). Renders nothing. */}
       <WalletConnectTracker />
+
+      {/* Sticky banner on every page when the connected wallet is the
+          recipient of one or more Pending demos. Renders nothing when
+          the connected wallet has no pending incoming demos, so non-
+          recipients (and disconnected visitors) are unaffected. */}
+      <RecipientDemoBanner />
       {page === 'landing'      && <Landing onNav={navigate} />}
       {page === 'create'       && <DepositForm />}
       {page === 'status'       && <EscrowStatus onGoToClaim={goToClaim} />}
