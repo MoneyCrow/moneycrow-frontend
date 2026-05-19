@@ -254,17 +254,14 @@ function isLikelySpam(symbol: string, name: string | null | undefined): boolean 
  * also be lowercase to match.
  */
 const SPAM_CONTRACTS: Record<string, ReadonlySet<string>> = {
-  // TODO: full Ethereum spam addresses. Captured prefixes (10 hex chars
-  // each) from the live wallet — not callable as exact-match keys until
-  // expanded. Drop the entries below into the Set as `.toLowerCase()`
-  // strings once you have the full 0x-prefixed 40-char hex:
-  //   '0x00e2b6d170…',  // DOG
-  //   '0x05cd843067…',  // DOGE
-  //   '0x180af13118…',  // SATO
-  //   '0x37dabad8ac…',  // DOG (duplicate symbol, different contract)
-  //   '0x4921bb864d…',  // WAR
-  //   '0x6cd62ece64…',  // BIT
-  ethereum: new Set<string>(),
+  ethereum: new Set([
+    '0x00e2b6d170740c15bf9fb01d0b6e77c0d4510e32', // DOG
+    '0x05cd8430676f04b63b33c1ece124818858edfc4f', // DOGE
+    '0x180af13118f2968ede08235dbf6034b63ebb3451', // SATO
+    '0x37dabad8ac496148596196fe9adeb54ee3111c78', // DOG (duplicate symbol, different contract)
+    '0x4921bb864de2e557939b074be20ff4b98723b86b', // WAR
+    '0x6cd62ece6442d3b989f8cd1b3201727964c6fc26', // BIT
+  ].map(s => s.toLowerCase())),
   base: new Set([
     '0x0d4d191a72c1d8d6703d6d3ed1a532b67d5a5f14', // SEC
     '0x1f847ee5247124beeab90f78d759369100cb63d4', // DEUS
