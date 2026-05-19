@@ -556,6 +556,39 @@ export function DemoModePanel({ address: adminAddr, chain }: Props) {
                   </div>
                 </div>
 
+                {/* Share link — manual notification path while the
+                    backend email/Telegram delivery isn't wired yet.
+                    Building the URL from window.location.origin so it
+                    works in dev / preview / prod without hardcoding
+                    moneycrow.xyz. */}
+                {(() => {
+                  const shareUrl = `${window.location.origin}/?tab=demo-accept&depositor=${demo.depositor}`;
+                  return (
+                    <div style={rowStyle}>
+                      <div style={rowLabelStyle}>Share link</div>
+                      <div style={{ ...rowValueStyle, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <code style={{ fontFamily: 'monospace', fontSize: 11, color: textSecondary, wordBreak: 'break-all', flex: '1 1 280px', minWidth: 0 }}>
+                          {shareUrl}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => navigator.clipboard?.writeText(shareUrl).catch(() => {})}
+                          title="Copy share link"
+                          aria-label="Copy share link to clipboard"
+                          style={{
+                            background: 'transparent', border: `1px solid ${border}`,
+                            padding: '2px 6px', cursor: 'pointer',
+                            fontSize: 10, color: textTertiary, letterSpacing: '0.06em', textTransform: 'uppercase',
+                            fontFamily: "'Space Grotesk', sans-serif",
+                          }}
+                        >
+                          copy
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Token + amount */}
                 <div style={rowStyle}>
                   <div style={rowLabelStyle}>Amount</div>
@@ -700,6 +733,22 @@ export function DemoModePanel({ address: adminAddr, chain }: Props) {
             <SharpInput label="Depositor Email" id="demoDEmail" type="email" placeholder="admin@example.com" value={depositorEmail} onChange={e => setDepositorEmail(e.target.value)} />
             <SharpInput label="Depositor Telegram" id="demoDTg" placeholder="@username" value={depositorTelegram} onChange={e => setDepositorTelegram(e.target.value)} />
           </div>
+
+          {/* Notifications-coming-soon notice. The email + telegram
+              inputs above are POSTed to the backend on create, but
+              the backend doesn't deliver outbound messages yet — the
+              fields are captured for the eventual notifier service.
+              For now, the admin shares the link manually with their
+              recipient. URL uses window.location.origin so dev /
+              preview / prod each get the right host without
+              hardcoding. */}
+          <p style={{ fontSize: 12, color: textTertiary, lineHeight: 1.55, marginTop: -2, marginBottom: 4 }}>
+            Notifications coming soon — for now, share the link manually with your recipient:{' '}
+            <code style={{ fontFamily: 'monospace', fontSize: 11, color: textSecondary, wordBreak: 'break-all' }}>
+              {`${window.location.host}/?tab=demo-accept&depositor=${adminAddr}`}
+            </code>
+            {' '}(use the <strong style={{ color: '#F2B705', fontWeight: 700 }}>Copy share link</strong> button on the status card once your demo is created).
+          </p>
         </div>
 
         {/* ── Skip-recipient-acceptance toggle ─────────────────────────────
