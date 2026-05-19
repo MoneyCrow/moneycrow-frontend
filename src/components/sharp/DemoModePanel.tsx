@@ -286,6 +286,27 @@ export function DemoModePanel({ address: adminAddr, chain }: Props) {
     writeApprove({ address: demoAddr, abi: DEMO_ABI, functionName: 'approveDemo', args: [adminAddr] });
   };
 
+  // Cancel escape hatch — wires the admin/depositor side of the new
+  // cancelDemo contract function. Available on Pending OR Accepted
+  // states (Approved is terminal). On success, refetchDemo clears the
+  // local view; the contract delete() makes getDemoEscrow return a
+  // zero struct so the status card naturally disappears.
+  const { writeContract: writeCancel, data: cancelHash, isPending: cancelPending, error: cancelError, reset: resetCancel } = useWriteContract();
+  const { isLoading: cancelConfirming, isSuccess: cancelSuccess } = useWaitForTransactionReceipt({ hash: cancelHash });
+
+  useEffect(() => { if (cancelSuccess) { refetchDemo(); } }, [cancelSuccess, refetchDemo]);
+
+  const handleCancelDemo = () => {
+    if (!demoAddr) return;
+    resetCancel();
+    // Cancelling our own demo — adminAddr is both the depositor key for
+    // getDemoEscrow and the depositor argument to cancelDemo. The
+    // contract accepts admin, depositor, or recipient as caller; here
+    // we're all three of admin and depositor (the recipient case is
+    // handled separately in MyDemosPanel / RecipientDemoBanner).
+    writeCancel({ address: demoAddr, abi: DEMO_ABI, functionName: 'cancelDemo', args: [adminAddr] });
+  };
+
   // ── Skip-recipient-acceptance auto-chain ──────────────────────────────────
   // The admin can short-circuit the recipient round-trip by:
   //   - Locking the recipient field to their own address (so they ARE the
@@ -635,14 +656,14 @@ export function DemoModePanel({ address: adminAddr, chain }: Props) {
                     in a later commit will surface that route to recipients. */}
                 <div style={{ marginTop: 12, borderTop: `1px solid ${border}`, paddingTop: 14 }}>
                   {demoStatus === 0 && demo.depositor.toLowerCase() === adminAddr.toLowerCase() && (
-                    <p style={{ fontSize: 12, color: textSecondary, fontStyle: 'italic', margin: 0 }}>
+                    <p style={{ fontSize: 12, color: textSecondary, fontStyle: 'italic', margin: 0, marginBottom: 12 }}>
                       Waiting for recipient <code style={{ fontFamily: 'monospace', fontSize: 11 }}>{truncAddr(demo.recipient)}</code> to accept.
                     </p>
                   )}
                   {demoStatus === 0 && demo.depositor.toLowerCase() !== adminAddr.toLowerCase() && (
                     <span
                       title="approveDemo requires recipient acceptance first — contract reverts on Pending state"
-                      style={{ display: 'inline-block', cursor: 'not-allowed' }}
+                      style={{ display: 'inline-block', cursor: 'not-allowed', marginBottom: 12 }}
                     >
                       <SharpButton disabled style={{ opacity: 0.5 }}>
                         Force Approve
@@ -650,7 +671,7 @@ export function DemoModePanel({ address: adminAddr, chain }: Props) {
                     </span>
                   )}
                   {demoStatus === 1 && (
-                    <div>
+                    <div style={{ marginBottom: 12 }}>
                       {approveSuccess ? (
                         <div className="alert alert-success">Demo approved — flow complete</div>
                       ) : (
@@ -677,6 +698,35 @@ export function DemoModePanel({ address: adminAddr, chain }: Props) {
                     <p style={{ fontSize: 12, color: textSecondary, fontStyle: 'italic', margin: 0 }}>
                       Demo complete — terminal state, no further actions.
                     </p>
+                  )}
+
+                  {/* Cancel button — escape hatch from the one-way state
+                      machine. Available on Pending OR Accepted states; the
+                      contract rejects cancellation of Approved. Neutral
+                      visual treatment (outline + secondary text colour)
+                      so it doesn't compete with the primary
+                      Approve & Release action on Accepted demos. */}
+                  {(demoStatus === 0 || demoStatus === 1) && (
+                    <div>
+                      <SharpButton
+                        onClick={handleCancelDemo}
+                        disabled={cancelPending || cancelConfirming}
+                        style={{
+                          background: 'transparent',
+                          color: textSecondary,
+                          border: `1px solid ${border}`,
+                        }}
+                      >
+                        {cancelPending ? 'Awaiting signature...' : cancelConfirming ? 'Mining...' : 'Cancel Demo'}
+                      </SharpButton>
+                      {cancelError && <div className="alert alert-error" style={{ marginTop: 8 }}>{cancelError.message}</div>}
+                      {cancelHash && (
+                        <div style={{ marginTop: 6, fontSize: 11 }}>
+                          <a href={`${explorerBase}/tx/${cancelHash}`} target="_blank" rel="noreferrer"
+                            style={{ color: textTertiary }}>View tx ↗</a>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { formatEther, formatUnits } from 'viem';
-import { useAccount } from 'wagmi';
+import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { useTheme } from '../../context/ThemeContext';
 import { scanAllDemos, type DemoEntry } from '../../lib/demoScan';
+import { DEMO_ABI, getDemoAddress } from '../../contracts/EscrowDemo';
 
 /**
  * Sticky banner shown on every page when the connected wallet is the
@@ -244,6 +245,22 @@ export function RecipientDemoBanner() {
     });
   };
 
+  /** Called by a row after its cancelDemo (decline) tx confirms. Drops
+   *  the demo from in-memory state and rewrites the localStorage cache
+   *  WITHOUT that entry so reloading doesn't bring the banner back —
+   *  unlike `dismiss` which is sessionStorage-only and intentionally
+   *  re-shows on full page reload. A declined demo is gone from chain
+   *  state too, so there's nothing to come back to. */
+  const declined = (d: PendingDemo) => {
+    if (!address) return;
+    setDemos(prev => {
+      const next = (prev ?? []).filter(x => !(x.chainId === d.chainId && x.depositor.toLowerCase() === d.depositor.toLowerCase()));
+      // Persist the trimmed list so a reload doesn't resurrect the row.
+      saveCache(address, next);
+      return next;
+    });
+  };
+
   if (!address || visible.length === 0) return null;
 
   // Render each visible banner as its own row in a sticky column at the
@@ -252,7 +269,13 @@ export function RecipientDemoBanner() {
   return (
     <div style={{ position: 'sticky', top: 0, zIndex: 200, marginBottom: 14 }}>
       {visible.map(d => (
-        <DemoBannerRow key={dismissKey(d)} demo={d} isDark={isDark} onDismiss={() => dismiss(d)} />
+        <DemoBannerRow
+          key={dismissKey(d)}
+          demo={d}
+          isDark={isDark}
+          onDismiss={() => dismiss(d)}
+          onDeclined={() => declined(d)}
+        />
       ))}
     </div>
   );
@@ -261,12 +284,17 @@ export function RecipientDemoBanner() {
 // ── Banner row ───────────────────────────────────────────────────────────────
 
 interface RowProps {
-  demo:      PendingDemo;
-  isDark:    boolean;
-  onDismiss: () => void;
+  demo:       PendingDemo;
+  isDark:     boolean;
+  onDismiss:  () => void;
+  /** Fired after the user's Decline tx confirms — the parent drops the
+   *  demo from state + persists the trimmed list so a reload doesn't
+   *  resurrect it. Different from onDismiss (sessionStorage, re-shows
+   *  on reload) because a declined demo is gone from chain state. */
+  onDeclined: () => void;
 }
 
-function DemoBannerRow({ demo, isDark, onDismiss }: RowProps) {
+function DemoBannerRow({ demo, isDark, onDismiss, onDeclined }: RowProps) {
   const textPrimary  = isDark ? '#FFFFFF' : '#111111';
   const textSecondary = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(17,17,17,0.55)';
   const border       = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)';
@@ -280,10 +308,27 @@ function DemoBannerRow({ demo, isDark, onDismiss }: RowProps) {
   const acceptHref  = `?tab=demo-accept&depositor=${demo.depositor}`;
   const detailsHref = acceptHref;
 
-  // Decline placeholder. The contract has no declineDemo function today;
-  // the button renders as visibly disabled so the future contract upgrade
-  // can wire it up without re-introducing the UI.
-  const declineDisabledTitle = 'Decline requires a contract upgrade';
+  // Decline wiring. cancelDemo accepts the recipient as caller per the
+  // contract's 3-way auth (admin / depositor / recipient). The connected
+  // wallet IS the recipient here — the banner only renders for demos
+  // matched to the connected address — so this call is authorised.
+  const demoAddr = getDemoAddress(demo.chainId);
+  const { writeContract, data: declineHash, isPending: declinePending, error: declineError, reset } = useWriteContract();
+  const { isLoading: declineConfirming, isSuccess: declineSuccess } = useWaitForTransactionReceipt({ hash: declineHash });
+
+  // On confirmation, dismiss the banner row immediately (don't wait for
+  // the next 5-minute scan to discover the demo is gone). Guarded
+  // by useEffect so the parent's state update lands in the next render
+  // tick rather than during the wagmi hook's own render.
+  useEffect(() => {
+    if (declineSuccess) onDeclined();
+  }, [declineSuccess]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleDecline = () => {
+    if (!demoAddr) return;
+    reset();
+    writeContract({ address: demoAddr, abi: DEMO_ABI, functionName: 'cancelDemo', args: [demo.depositor] });
+  };
 
   const pillStyle: React.CSSProperties = {
     fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
@@ -341,21 +386,21 @@ function DemoBannerRow({ demo, isDark, onDismiss }: RowProps) {
           Accept
         </a>
 
-        <span title={declineDisabledTitle} style={{ display: 'inline-block', cursor: 'not-allowed' }}>
-          <button
-            type="button"
-            disabled
-            style={{
-              ...buttonBase,
-              color: textSecondary,
-              borderColor: border,
-              opacity: 0.5,
-              cursor: 'not-allowed',
-            }}
-          >
-            Decline
-          </button>
-        </span>
+        <button
+          type="button"
+          onClick={handleDecline}
+          disabled={declinePending || declineConfirming || !demoAddr}
+          title={declineError ? declineError.message : 'Cancel this demo on chain'}
+          style={{
+            ...buttonBase,
+            color: textSecondary,
+            borderColor: border,
+            opacity: (declinePending || declineConfirming) ? 0.5 : 1,
+            cursor: (declinePending || declineConfirming) ? 'wait' : 'pointer',
+          }}
+        >
+          {declinePending ? 'Signing…' : declineConfirming ? 'Mining…' : 'Decline'}
+        </button>
 
         <a
           href={detailsHref}

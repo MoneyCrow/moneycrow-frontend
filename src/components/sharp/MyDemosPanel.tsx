@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { formatEther, formatUnits } from 'viem';
-import { useAccount } from 'wagmi';
+import { useAccount, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { useTheme } from '../../context/ThemeContext';
 import { scanAllDemos, type DemoEntry, type DemoScanRole } from '../../lib/demoScan';
-import { DEMO_STATUS_LABEL, DEMO_STATUS_VARIANT } from '../../contracts/EscrowDemo';
+import { DEMO_ABI, DEMO_STATUS_LABEL, DEMO_STATUS_VARIANT, getDemoAddress } from '../../contracts/EscrowDemo';
 import { SharpCard } from './SharpCard';
 import { SharpPageHeader } from './SharpPageHeader';
 import { SharpBadge } from './SharpBadge';
@@ -145,6 +145,23 @@ export function MyDemosPanel({ isAdmin }: Props) {
   const [received, setReceived] = useState<TabResult | null>(null);
   const [sent,     setSent]     = useState<TabResult | null>(null);
   const [scanning, setScanning] = useState<{ received: boolean; sent: boolean }>({ received: false, sent: false });
+  // Force a re-scan after a row's cancelDemo confirms — the scan effect
+  // depends on this counter so bumping it invalidates the cache + reruns.
+  const [refreshTick, setRefreshTick] = useState(0);
+
+  /** Drop the cached entries for `role` and force a fresh scan. Called by
+   *  each row after its cancelDemo tx confirms. Net effect: the cancelled
+   *  demo's getDemoEscrow returns a zero struct (delete'd by the contract)
+   *  → the scan's role-membership guard filters it out → the row
+   *  disappears on the next render pass. */
+  const invalidateRole = (role: DemoScanRole) => {
+    if (!address) return;
+    try { localStorage.removeItem(cacheKey(role, address)); }
+    catch { /* best-effort */ }
+    if (role === 'recipient') setReceived(null);
+    else setSent(null);
+    setRefreshTick(t => t + 1);
+  };
 
   // Drive the scan for the active tab, with cache-then-refresh. Both
   // tabs eventually scan independently so opening either one warms its
@@ -179,7 +196,7 @@ export function MyDemosPanel({ isAdmin }: Props) {
       setScanning(prev => ({ ...prev, [tab]: false }));
     })();
     return () => { cancelled = true; };
-  }, [address, tab]);
+  }, [address, tab, refreshTick]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -285,6 +302,7 @@ export function MyDemosPanel({ isAdmin }: Props) {
           textPrimary={textPrimary}
           textSecondary={textSecondary}
           textTertiary={textTertiary}
+          onCancelled={invalidateRole}
         />
       </SharpCard>
     </div>
@@ -303,9 +321,13 @@ interface RowsProps {
   textPrimary:   string;
   textSecondary: string;
   textTertiary:  string;
+  /** Called by each row after its cancelDemo tx confirms — invalidates
+   *  the localStorage cache and triggers a fresh scan, which drops the
+   *  cancelled row on the next render. */
+  onCancelled:   (role: DemoScanRole) => void;
 }
 
-function DemoRows({ tab, entries, isLoading, isAdmin, isDark, border, textPrimary, textSecondary, textTertiary }: RowsProps) {
+function DemoRows({ tab, entries, isLoading, isAdmin, isDark, border, textPrimary, textSecondary, textTertiary, onCancelled }: RowsProps) {
   const skeletonBg = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
 
   // Cold-cache state (no entries yet, scan in flight) — render skeleton
@@ -352,6 +374,7 @@ function DemoRows({ tab, entries, isLoading, isAdmin, isDark, border, textPrimar
           textPrimary={textPrimary}
           textSecondary={textSecondary}
           textTertiary={textTertiary}
+          onCancelled={onCancelled}
         />
       ))}
     </div>
@@ -368,9 +391,10 @@ interface RowProps {
   textPrimary:   string;
   textSecondary: string;
   textTertiary:  string;
+  onCancelled:   (role: DemoScanRole) => void;
 }
 
-function DemoRow({ tab, demo, isDark, border, textPrimary, textSecondary, textTertiary }: RowProps) {
+function DemoRow({ tab, demo, isDark, border, textPrimary, textSecondary, textTertiary, onCancelled }: RowProps) {
   // Counterparty: depositor on the "Sent to me" tab, recipient on
   // "Sent by me". The connected wallet is implicit (it's the other
   // side of the pair) so showing only the counterparty keeps the row
@@ -379,14 +403,42 @@ function DemoRow({ tab, demo, isDark, border, textPrimary, textSecondary, textTe
   const cpLabel      = tab === 'received' ? 'from' : 'to';
 
   // Action button shape varies by tab + status:
-  //   Sent to me, Pending     → "Accept" → links to existing
-  //                              /demo-accept route (full EIP-712 flow)
-  //   Sent to me, Accepted    → none (waiting on depositor's admin
-  //                              approveDemo — passive state for recipient)
-  //   Sent to me, Approved    → none (terminal)
-  //   Sent by me, any status  → "Cancel" disabled (placeholder for
-  //                              future cancelDemo contract upgrade)
+  //   Sent to me, Pending     → "Accept" + "Decline" (cancelDemo as recipient)
+  //   Sent to me, Accepted    → "Details" + "Decline" (recipient can still
+  //                              cancel after accepting — contract allows it)
+  //   Sent to me, Approved    → "Details" only (terminal state)
+  //   Sent by me, Pending/Acc → "Details" + "Cancel" (cancelDemo as depositor)
+  //   Sent by me, Approved    → "Details" only (terminal state)
   const acceptHref = `?tab=demo-accept&depositor=${demo.depositor}`;
+
+  // Wire the cancel/decline action. Both buttons hit the same contract
+  // function (cancelDemo) — the contract's 3-way auth check (admin /
+  // depositor / recipient) accepts both callers, and the canceller
+  // identity goes into the event for analytics. demoAddr is resolved
+  // from the row's chainId so a Polygon row hits the Polygon contract.
+  const demoAddr = getDemoAddress(demo.chainId);
+  const { writeContract, data: cancelHash, isPending: cancelPending, error: cancelError, reset } = useWriteContract();
+  const { isLoading: cancelConfirming, isSuccess: cancelSuccess } = useWaitForTransactionReceipt({ hash: cancelHash });
+
+  // On confirmation, ask the parent to invalidate this tab's cache +
+  // re-scan. The cancelled demo's getDemoEscrow returns a zero struct,
+  // so the scan filters it out and this row disappears from the next
+  // render. Guarded by a ref so we only fire once per tx receipt.
+  useEffect(() => {
+    if (cancelSuccess) onCancelled(tab === 'received' ? 'recipient' : 'depositor');
+  }, [cancelSuccess]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleCancel = () => {
+    if (!demoAddr) return;
+    reset();
+    writeContract({ address: demoAddr, abi: DEMO_ABI, functionName: 'cancelDemo', args: [demo.depositor] });
+  };
+
+  // Decline / Cancel button label changes with the tab, but both hit
+  // the same handler. "Awaiting signature…" / "Mining…" override the
+  // label while in-flight so the user sees feedback for each phase.
+  const cancelLabel = tab === 'received' ? 'Decline' : 'Cancel';
+  const cancelDisplay = cancelPending ? 'Signing…' : cancelConfirming ? 'Mining…' : cancelLabel;
 
   const rowBg     = isDark ? 'transparent' : 'transparent';
   const hoverBg   = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)';
@@ -470,32 +522,20 @@ function DemoRow({ tab, demo, isDark, border, textPrimary, textSecondary, textTe
       </div>
 
       {/* Action */}
-      <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-        {tab === 'received' && demo.status === 0 && (
-          <a
-            href={acceptHref}
-            style={{
-              ...buttonBase,
-              background: '#F2B705', color: '#000', borderColor: '#F2B705',
-            }}
-          >
-            Accept
-          </a>
-        )}
-        {tab === 'received' && demo.status !== 0 && (
-          <a
-            href={acceptHref}
-            style={{
-              ...buttonBase,
-              color: textPrimary,
-              borderColor: border,
-            }}
-          >
-            Details
-          </a>
-        )}
-        {tab === 'sent' && (
-          <>
+      <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {tab === 'received' && demo.status === 0 && (
+            <a
+              href={acceptHref}
+              style={{
+                ...buttonBase,
+                background: '#F2B705', color: '#000', borderColor: '#F2B705',
+              }}
+            >
+              Accept
+            </a>
+          )}
+          {tab === 'received' && demo.status !== 0 && (
             <a
               href={acceptHref}
               style={{
@@ -506,22 +546,50 @@ function DemoRow({ tab, demo, isDark, border, textPrimary, textSecondary, textTe
             >
               Details
             </a>
-            <span title="Cancel requires a contract upgrade" style={{ display: 'inline-block', cursor: 'not-allowed' }}>
-              <button
-                type="button"
-                disabled
-                style={{
-                  ...buttonBase,
-                  color: textSecondary,
-                  borderColor: border,
-                  opacity: 0.5,
-                  cursor: 'not-allowed',
-                }}
-              >
-                Cancel
-              </button>
-            </span>
-          </>
+          )}
+          {tab === 'sent' && (
+            <a
+              href={acceptHref}
+              style={{
+                ...buttonBase,
+                color: textPrimary,
+                borderColor: border,
+              }}
+            >
+              Details
+            </a>
+          )}
+
+          {/* Cancel / Decline. Cancellation is available on every
+              non-terminal state (status !== 2 / Approved) for both
+              tabs — recipients can decline a Pending or Accepted demo,
+              depositors can recall theirs. Already-Approved rows
+              skip this branch (terminal). */}
+          {demo.status !== 2 && demoAddr && (
+            <button
+              type="button"
+              onClick={handleCancel}
+              disabled={cancelPending || cancelConfirming}
+              style={{
+                ...buttonBase,
+                color: textSecondary,
+                borderColor: border,
+                opacity: (cancelPending || cancelConfirming) ? 0.5 : 1,
+                cursor: (cancelPending || cancelConfirming) ? 'wait' : 'pointer',
+              }}
+            >
+              {cancelDisplay}
+            </button>
+          )}
+        </div>
+
+        {/* Per-row error surface. Most cancel failures are user-
+            rejected-the-popup (uninteresting) or a stale row that's
+            already been cancelled (revert message worth showing). */}
+        {cancelError && (
+          <div style={{ fontSize: 10, color: '#F87171', maxWidth: 280, textAlign: 'right' }}>
+            {cancelError.message.slice(0, 120)}
+          </div>
         )}
       </div>
     </div>
