@@ -3,7 +3,7 @@ import { useTheme } from '../context/ThemeContext';
 import { SharpPageHeader } from '../components/sharp/SharpPageHeader';
 
 const faqs = [
-  { q: 'What is MoneyCrow?', a: 'MoneyCrow is a trustless escrow protocol on Base and Polygon. Smart contracts hold funds until both parties confirm the deal — no human custody, no middleman.' },
+  { q: 'What is MONEYCROW?', a: 'MoneyCrow is a trustless escrow protocol on Base and Polygon. Smart contracts hold funds until both parties confirm the deal — no human custody, no middleman.' },
   { q: 'What tokens are supported?', a: 'ETH, USDC, MATIC, and WBTC. All held natively in the smart contract. Additional ERC-20 tokens are on the roadmap.' },
   { q: 'How does admin approval work?', a: 'The admin acts as a neutral on-chain arbiter. Once delivery is confirmed, the admin reviews evidence and approves the release or triggers a refund. Every action is an on-chain transaction.' },
   { q: 'Are the contracts audited?', a: 'Yes — professionally audited with zero critical vulnerabilities. The full audit report is publicly available in our documentation.' },
