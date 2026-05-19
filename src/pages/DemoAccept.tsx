@@ -10,6 +10,7 @@ import { SharpInput } from '../components/sharp/SharpInput';
 import { SharpPageHeader } from '../components/sharp/SharpPageHeader';
 import { WalletSnapshot } from '../components/sharp/WalletSnapshot';
 import { TronDemoAcceptPanel } from '../components/sharp/TronDemoAcceptPanel';
+import { DemoExplainerModal, hasSeenDemoExplainer } from '../components/sharp/DemoExplainerModal';
 import { useTheme } from '../context/ThemeContext';
 
 const ETH_ZERO = '0x0000000000000000000000000000000000000000';
@@ -46,6 +47,11 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
   const [sig, setSig]                       = useState<`0x${string}` | null>(null);
   const [demoDescription, setDemoDescription] = useState('');
   const [verifyToken, setVerifyToken]       = useState('');
+  // First-time explainer modal — opens only on the recipient's FIRST
+  // Accept click (per-browser, via localStorage flag). Subsequent
+  // clicks call signTypedData directly. The flag flips in
+  // markDemoExplainerSeen() when the user clicks "Continue to wallet".
+  const [explainerOpen, setExplainerOpen]   = useState(false);
 
   const isValidAddr      = (a: string) => a.length === 42 && a.startsWith('0x');
   const isValidTronAddr  = (a: string) => a.length === 34 && a.startsWith('T');
@@ -96,7 +102,10 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
 
   const { signTypedData, isPending: isSigning, error: signError } = useSignTypedData();
 
-  const handleSign = () => {
+  /** The raw "trigger the wallet popup" call. Called either directly
+   *  (when the explainer has been seen before) or from the modal's
+   *  "Continue to wallet" button after the explainer is acknowledged. */
+  const triggerSign = () => {
     if (!demo || !demoAddr || !address) return;
     setSig(null);
     signTypedData(
@@ -114,6 +123,18 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
       },
       { onSuccess: (s) => setSig(s) },
     );
+  };
+
+  /** User-facing entry point for the Sign button. First click in this
+   *  browser surfaces the explainer; subsequent clicks fire the wallet
+   *  popup directly. The flag flips inside DemoExplainerModal when the
+   *  user clicks "Continue to wallet" (markDemoExplainerSeen()). */
+  const handleSign = () => {
+    if (hasSeenDemoExplainer()) {
+      triggerSign();
+    } else {
+      setExplainerOpen(true);
+    }
   };
 
   const { writeContract, data: txHash, isPending: isTxPending, error: txError, reset: resetTx } = useWriteContract();
@@ -201,6 +222,16 @@ export default function DemoAccept({ initialDepositor = '' }: Props) {
 
   return (
     <div>
+      {/* First-time explainer. Renders nothing while closed. The
+          "Continue to wallet" handler fires triggerSign(), which kicks
+          off the same wallet popup the Sign button would have on a
+          warm flag. */}
+      <DemoExplainerModal
+        open={explainerOpen}
+        onCancel={() => setExplainerOpen(false)}
+        onContinue={() => { setExplainerOpen(false); triggerSign(); }}
+      />
+
       <SharpPageHeader title="Demo Accept" subtitle="Sign demo acceptance to simulate the escrow flow." />
 
       <SharpCard style={{ padding: '28px 32px' }}>
