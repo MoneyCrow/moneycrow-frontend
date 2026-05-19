@@ -8,6 +8,7 @@ const NAV_ITEMS: { id: Page; label: string }[] = [
   { id: 'landing',      label: 'Home'          },
   { id: 'create',       label: 'Create Escrow' },
   { id: 'status',       label: 'My Escrows'    },
+  { id: 'my-demos',     label: 'My Demos'      },
   { id: 'claim',        label: 'Claim Funds'   },
   { id: 'how-it-works', label: 'How It Works'  },
   { id: 'faq',          label: 'FAQ'           },

@@ -10,13 +10,14 @@ import EscrowStatus   from './pages/EscrowStatus';
 import AdminDashboard from './pages/AdminDashboard';
 import ClaimPage      from './pages/ClaimPage';
 import DemoAccept     from './pages/DemoAccept';
+import MyDemos        from './pages/MyDemos';
 import HowItWorks     from './pages/HowItWorks';
 import Faq            from './pages/Faq';
 import { ESCROW_ABI, getEscrowAddress } from './contracts/Escrow';
 
-export type Page = 'landing' | 'create' | 'status' | 'claim' | 'demo-accept' | 'admin' | 'how-it-works' | 'faq';
+export type Page = 'landing' | 'create' | 'status' | 'claim' | 'demo-accept' | 'my-demos' | 'admin' | 'how-it-works' | 'faq';
 
-const VALID_TABS: Page[] = ['landing', 'create', 'status', 'claim', 'demo-accept', 'admin', 'how-it-works', 'faq'];
+const VALID_TABS: Page[] = ['landing', 'create', 'status', 'claim', 'demo-accept', 'my-demos', 'admin', 'how-it-works', 'faq'];
 
 function urlParam(key: string): string {
   try { return new URLSearchParams(window.location.search).get(key) ?? ''; } catch { return ''; }
@@ -80,6 +81,7 @@ function AppInner() {
       {page === 'status'       && <EscrowStatus onGoToClaim={goToClaim} />}
       {page === 'claim'        && <ClaimPage initialDepositor={claimDepositor} />}
       {page === 'demo-accept'  && <DemoAccept initialDepositor={demoAcceptDepositor} />}
+      {page === 'my-demos'     && <MyDemos isAdmin={isAdmin} />}
       {page === 'how-it-works' && <HowItWorks />}
       {page === 'faq'          && <Faq />}
       {page === 'admin'        && <AdminDashboard />}

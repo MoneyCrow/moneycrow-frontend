@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { createPublicClient, http, parseAbiItem, formatEther, formatUnits } from 'viem';
-import type { PublicClient } from 'viem';
-import { base, polygon } from 'viem/chains';
+import { formatEther, formatUnits } from 'viem';
 import { useAccount } from 'wagmi';
 import { useTheme } from '../../context/ThemeContext';
-import { DEMO_ABI, getDemoAddress } from '../../contracts/EscrowDemo';
+import { scanAllDemos, type DemoEntry } from '../../lib/demoScan';
 
 /**
  * Sticky banner shown on every page when the connected wallet is the
@@ -50,16 +48,6 @@ import { DEMO_ABI, getDemoAddress } from '../../contracts/EscrowDemo';
  *   reload but persists across page navigations within the same tab.
  */
 
-const DEMO_CREATED_EVENT = parseAbiItem(
-  'event DemoCreated(address indexed depositor, address indexed recipient, address token, uint256 amount)',
-);
-
-const DEPLOY_BLOCK: Record<number, bigint> = {
-  8453: 44905249n,
-  137:  85739901n,
-};
-
-const CHUNK_SIZE = 10_000n;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 // 30-day scan window in blocks (Base block time ~2 s → 30d ≈ 1.296M
@@ -79,52 +67,16 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 // asks for full history.
 const SCAN_WINDOW_BLOCKS = 1_296_000n;
 
-const ALCHEMY_KEY = (import.meta.env.VITE_ALCHEMY_API_KEY as string | undefined) ?? '';
+// Status filter: banner only surfaces Pending demos. Accepted demos are
+// already in motion (recipient signed, waiting for admin approve);
+// Approved demos are terminal. Neither needs a nudge.
+const PENDING_ONLY = new Set<0 | 1 | 2>([0]);
 
-/** Build an Alchemy-routed viem client for the given chain. Falls through
- *  to per-chain RPC override env var, then viem's chain default — exact
- *  same hierarchy as KnownWalletsPanel.tsx so a key swap propagates
- *  uniformly. */
-function makeClient(chainKey: 'base' | 'polygon'): PublicClient {
-  const url = (() => {
-    if (ALCHEMY_KEY) {
-      const sub = chainKey === 'base' ? 'base-mainnet' : 'polygon-mainnet';
-      return `https://${sub}.g.alchemy.com/v2/${ALCHEMY_KEY}`;
-    }
-    const env = import.meta.env as Record<string, string | undefined>;
-    return chainKey === 'base' ? env.VITE_BASE_RPC_URL : env.VITE_POLYGON_RPC_URL;
-  })();
-  return createPublicClient({
-    chain:     chainKey === 'base' ? base : polygon,
-    transport: http(url),
-  }) as PublicClient;
-}
-
-interface ChainConfig {
-  key:         'base' | 'polygon';
-  chainId:     number;
-  displayName: string;
-  explorer:    string;
-  client:      PublicClient;
-}
-
-const CHAINS: ChainConfig[] = [
-  { key: 'base',    chainId: 8453, displayName: 'Base',    explorer: 'https://basescan.org',    client: makeClient('base')    },
-  { key: 'polygon', chainId: 137,  displayName: 'Polygon', explorer: 'https://polygonscan.com', client: makeClient('polygon') },
-];
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-export interface PendingDemo {
-  chainId:    number;
-  chainKey:   'base' | 'polygon';
-  depositor:  `0x${string}`;
-  recipient:  `0x${string}`;
-  token:      `0x${string}`;
-  amount:     string;       // hex string so it survives JSON.stringify in cache
-  termsHash:  `0x${string}`;
-  createdAt:  number;       // unix seconds
-}
+// The banner's per-row data type is just a DemoEntry from the shared
+// scan lib — aliased here so the file's UI code stays readable when
+// referencing it. Status is always 0 (Pending) by virtue of the
+// PENDING_ONLY filter passed to scanAllDemos.
+type PendingDemo = DemoEntry;
 
 interface CachedScan {
   scannedAt: number;
@@ -215,91 +167,6 @@ function loadDismissed(): Set<string> {
   return out;
 }
 
-// ── Chain scan ───────────────────────────────────────────────────────────────
-
-async function scanChainForRecipient(
-  cfg:       ChainConfig,
-  recipient: `0x${string}`,
-): Promise<PendingDemo[]> {
-  const demoAddr = getDemoAddress(cfg.chainId);
-  if (!demoAddr) return [];
-
-  const deployBlock = DEPLOY_BLOCK[cfg.chainId] ?? 0n;
-  const toBlock     = await cfg.client.getBlockNumber();
-  // 30-day window, clamped at deploy block so brand-new contracts (or
-  // freshly-deployed chains) don't underflow into negative ranges.
-  const windowStart = toBlock > SCAN_WINDOW_BLOCKS ? toBlock - SCAN_WINDOW_BLOCKS : 0n;
-  const fromBlock   = windowStart > deployBlock ? windowStart : deployBlock;
-
-  // Collect DemoCreated logs in chunks. Per-chunk failure isn't fatal —
-  // we'd rather show partial results than mark the whole chain blocked.
-  type Log = { args?: { depositor?: `0x${string}`; recipient?: `0x${string}` }; blockNumber: bigint };
-  const allLogs: Log[] = [];
-  let chunkFrom = fromBlock;
-  while (chunkFrom <= toBlock) {
-    const chunkTo = chunkFrom + CHUNK_SIZE - 1n < toBlock ? chunkFrom + CHUNK_SIZE - 1n : toBlock;
-    try {
-      const chunk = await cfg.client.getLogs({
-        address: demoAddr,
-        event:   DEMO_CREATED_EVENT,
-        args:    { recipient }, // viem indexes this into topic[2]
-        fromBlock: chunkFrom,
-        toBlock:   chunkTo,
-      });
-      allLogs.push(...(chunk as unknown as Log[]));
-    } catch { /* skip chunk, continue */ }
-    chunkFrom = chunkTo + 1n;
-  }
-
-  // For each unique depositor, read current state. A given depositor only
-  // ever has ONE active demo (createDemo reverts on Pending/Accepted), so
-  // deduping by depositor is safe.
-  const uniqueDepositors = Array.from(new Set(
-    allLogs
-      .map(l => l.args?.depositor)
-      .filter((d): d is `0x${string}` => !!d),
-  ));
-
-  const reads = await Promise.allSettled(
-    uniqueDepositors.map(dep =>
-      cfg.client.readContract({
-        address:      demoAddr,
-        abi:          DEMO_ABI,
-        functionName: 'getDemoEscrow',
-        args:         [dep],
-      }),
-    ),
-  );
-
-  const out: PendingDemo[] = [];
-  reads.forEach((res, i) => {
-    if (res.status !== 'fulfilled') return;
-    const r = res.value as {
-      depositor: `0x${string}`; recipient: `0x${string}`; token: `0x${string}`;
-      amount: bigint; termsHash: `0x${string}`; status: number; createdAt: bigint;
-    };
-    // Status guard: only Pending.
-    if (r.status !== 0) return;
-    // Confirm the recipient still matches (no contract upgrades or address
-    // mismatches mid-flight) and skip self-sent demos.
-    if (r.recipient.toLowerCase() !== recipient.toLowerCase()) return;
-    if (r.depositor.toLowerCase() === recipient.toLowerCase()) return;
-    out.push({
-      chainId:   cfg.chainId,
-      chainKey:  cfg.key,
-      depositor: r.depositor,
-      recipient: r.recipient,
-      token:     r.token,
-      // Stringify amount as hex so it survives JSON serialisation.
-      amount:    `0x${r.amount.toString(16)}`,
-      termsHash: r.termsHash,
-      createdAt: Number(r.createdAt),
-    });
-    void uniqueDepositors[i]; // suppress unused-var linter
-  });
-  return out;
-}
-
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function RecipientDemoBanner() {
@@ -332,11 +199,20 @@ export function RecipientDemoBanner() {
     setScanning(true);
     let cancelled = false;
     (async () => {
-      const results = await Promise.all(
-        CHAINS.map(cfg => scanChainForRecipient(cfg, address).catch(() => [] as PendingDemo[])),
-      );
+      // Shared scan util (src/lib/demoScan.ts). Banner-specific knobs:
+      //   - scanWindowBlocks: 30-day cap, see SCAN_WINDOW_BLOCKS above
+      //   - statusFilter:     PENDING_ONLY — banner is a "needs your
+      //                       acceptance" prompt, no value in showing
+      //                       Accepted or Approved demos here
+      // Self-sent demos (depositor === recipient === address) are also
+      // hidden — they'd surface when the admin runs the skip-acceptance
+      // chain on their own wallet, which is noise.
+      const all = await scanAllDemos('recipient', address, {
+        scanWindowBlocks: SCAN_WINDOW_BLOCKS,
+        statusFilter:     PENDING_ONLY,
+      });
       if (cancelled) return;
-      const entries = results.flat();
+      const entries = all.filter(d => d.depositor.toLowerCase() !== address.toLowerCase());
       setDemos(entries);
       saveCache(address, entries);
       setScanning(false);

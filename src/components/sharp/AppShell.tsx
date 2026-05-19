@@ -7,12 +7,13 @@ import { useIsMobile } from './useIsMobile';
 import { MobileNav } from './MobileNav';
 import { AuditedBadge } from './AuditedBadge';
 
-export type Page = 'landing' | 'create' | 'status' | 'claim' | 'demo-accept' | 'admin' | 'how-it-works' | 'faq';
+export type Page = 'landing' | 'create' | 'status' | 'claim' | 'demo-accept' | 'my-demos' | 'admin' | 'how-it-works' | 'faq';
 
 const NAV_ITEMS: { id: Page; label: string }[] = [
   { id: 'landing',      label: 'Home'          },
   { id: 'create',       label: 'Create Escrow' },
   { id: 'status',       label: 'My Escrows'    },
+  { id: 'my-demos',     label: 'My Demos'      },
   { id: 'claim',        label: 'Claim Funds'   },
   { id: 'how-it-works', label: 'How It Works'  },
   { id: 'faq',          label: 'FAQ'           },
