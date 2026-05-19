@@ -27,9 +27,14 @@ export const DEMO_CREATED_EVENT = parseAbiItem(
   'event DemoCreated(address indexed depositor, address indexed recipient, address token, uint256 amount)',
 );
 
+// Deploy blocks for the redeployed MoneyCrowDemo (2026-05-19 with
+// cancelDemo). Both chains need fresh values — the new contracts at
+// 0x1D7C73fB… / 0xb02fe41C… don't share storage or event history with
+// the old contracts, so scanning from the old deploy blocks would waste
+// thousands of empty chunks before reaching any real DemoCreated event.
 const DEPLOY_BLOCK: Record<number, bigint> = {
-  8453: 44905249n,
-  137:  85739901n,
+  8453: 46207922n, // Base    — 0x1D7C73fB1BDdC3765D2476d65E1E3B388c589393
+  137:  87123531n, // Polygon — 0xb02fe41CC63f02a44c55D0111dA39C957463C8B4
 };
 
 const CHUNK_SIZE = 10_000n;

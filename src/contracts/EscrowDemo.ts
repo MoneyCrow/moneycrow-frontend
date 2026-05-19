@@ -1,6 +1,11 @@
+// Redeployed 2026-05-19 with cancelDemo + DemoCancelled. Old addresses
+// (Base 0xFc6e21…, Polygon 0x0fF9…) are immutable so any stuck demos there
+// are abandoned in chain storage; this new pair starts from a clean slate.
+// Deploy blocks captured in src/lib/demoScan.ts so the chunked scan begins
+// from the right point on each chain.
 export const DEMO_ADDRESS: Record<number, `0x${string}`> = {
-  8453: '0xFc6e21b81aF72c8a2077d1C73CEb16716bcf6061',
-  137:  '0x0fF998cDC01E285473120a8279A1be74C3d57929',
+  8453: '0x1D7C73fB1BDdC3765D2476d65E1E3B388c589393',
+  137:  '0xb02fe41CC63f02a44c55D0111dA39C957463C8B4',
 };
 
 export function getDemoAddress(chainId: number | undefined): `0x${string}` | undefined {
@@ -68,6 +73,17 @@ export const DEMO_ABI = [
     stateMutability: 'nonpayable',
     type: 'function',
   },
+  // Cancel: callable by admin, the depositor, or the recipient. The
+  // contract checks the caller is one of those three; the frontend
+  // gates the button to the same set so a wallet that can't cancel
+  // can't even try.
+  {
+    inputs: [{ name: 'depositor', type: 'address' }],
+    name: 'cancelDemo',
+    outputs: [],
+    stateMutability: 'nonpayable',
+    type: 'function',
+  },
   {
     inputs: [{ name: 'newAdmin', type: 'address' }],
     name: 'changeAdmin',
@@ -112,6 +128,18 @@ export const DEMO_ABI = [
     type: 'event',
     inputs: [
       { name: 'depositor', type: 'address', indexed: true },
+      { name: 'recipient', type: 'address', indexed: true },
+    ],
+  },
+  // Three indexed slots — the canceller distinction lets analytics tell
+  // admin-cleanup vs depositor-recall vs recipient-decline apart from the
+  // event stream alone without a follow-up read.
+  {
+    name: 'DemoCancelled',
+    type: 'event',
+    inputs: [
+      { name: 'depositor', type: 'address', indexed: true },
+      { name: 'canceller', type: 'address', indexed: true },
       { name: 'recipient', type: 'address', indexed: true },
     ],
   },
