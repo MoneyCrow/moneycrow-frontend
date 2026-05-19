@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   useWriteContract, useReadContract, useAccount,
-  useWaitForTransactionReceipt,
+  useWaitForTransactionReceipt, useSignTypedData,
 } from 'wagmi';
 import { formatEther, formatUnits } from 'viem';
 import { DEMO_ABI, DEMO_STATUS_LABEL, DEMO_STATUS_VARIANT, getDemoAddress } from '../../contracts/EscrowDemo';
@@ -31,6 +31,40 @@ import { useTheme } from '../../context/ThemeContext';
  */
 
 const ETH_ZERO = '0x0000000000000000000000000000000000000000';
+
+/**
+ * EIP-712 typed-data shape for the demo's accept signature. Mirrors the
+ * one in src/pages/DemoAccept.tsx — kept duplicated rather than imported
+ * because DemoAccept.tsx is a page component (with its own UI concerns),
+ * and a 7-line const isn't worth a shared module yet.
+ *
+ * Domain is derived per-call from { chainId, demoAddr } so the same code
+ * works on Base and Polygon without parameterisation here.
+ */
+const DEMO_TYPES = {
+  DemoAcceptance: [
+    { name: 'depositor',  type: 'address' },
+    { name: 'recipient',  type: 'address' },
+    { name: 'amount',     type: 'uint256' },
+    { name: 'token',      type: 'address' },
+    { name: 'termsHash',  type: 'bytes32' },
+  ],
+} as const;
+
+/**
+ * Skip-acceptance chain state machine. Tracks which of the three top-level
+ * steps (createDemo / acceptDemo / approveDemo) is currently mid-flight.
+ *
+ *   idle  → start  →  step1  →  step2  →  step3  →  done
+ *                      (create)  (accept)  (approve)
+ *                                  ↓
+ *                              error (any step that reverts or is rejected)
+ *
+ * step2 itself fans out into two wallet popups under the hood — first an
+ * off-chain typed-data sign, then the acceptDemo tx — but UX-wise it reads
+ * as one step. The progress strip in the JSX renders 1/3 → 2/3 → 3/3.
+ */
+type ChainStep = 'idle' | 'step1' | 'step2' | 'step3' | 'done' | 'error';
 
 /** Token picker for the Create Demo form. Same list as the prior inline
  *  version — kept verbatim so the dropdown ordering and labels match
@@ -227,6 +261,14 @@ export function DemoModePanel({ address: adminAddr, chain }: Props) {
       setCreateErrorMsg('Could not reach server — please try again');
       return;
     }
+    // Mark the chain as in-flight BEFORE writeCreate fires so the
+    // driver effect picks up createSuccess in the 'step1' state. If we
+    // set this after the call, the success could land before the state
+    // update, leaving the driver wedged in 'idle'.
+    if (skipAcceptance) {
+      setChainError(null);
+      setChainStep('step1');
+    }
     writeCreate({
       address: demoAddr, abi: DEMO_ABI, functionName: 'createDemo',
       args: [recipient as `0x${string}`, tokenAddress as `0x${string}`, parsedAmount!, termsHash],
@@ -243,6 +285,119 @@ export function DemoModePanel({ address: adminAddr, chain }: Props) {
     resetApprove();
     writeApprove({ address: demoAddr, abi: DEMO_ABI, functionName: 'approveDemo', args: [adminAddr] });
   };
+
+  // ── Skip-recipient-acceptance auto-chain ──────────────────────────────────
+  // The admin can short-circuit the recipient round-trip by:
+  //   - Locking the recipient field to their own address (so they ARE the
+  //     recipient, and CAN sign the acceptance themselves), then
+  //   - Auto-chaining createDemo → signTypedData + acceptDemo → approveDemo
+  //     in three sequential wallet popups (signTypedData is gas-free off-
+  //     chain, but the wallet still asks for it — so the actual popup
+  //     count is 4; the progress strip reads 1/3 → 2/3 → 3/3 because UX-
+  //     wise the typed-data sign is a sub-step of "accept").
+  //
+  // This is purely client-side orchestration. No contract change required —
+  // every step is a normal call the admin could do manually via the
+  // existing buttons + /demo-accept page.
+
+  const [skipAcceptance, setSkipAcceptance] = useState(false);
+  const [chainStep,      setChainStep]      = useState<ChainStep>('idle');
+  const [chainError,     setChainError]     = useState<{ step: 1|2|3; msg: string } | null>(null);
+
+  // When the toggle is on, the recipient input becomes a read-only mirror
+  // of the admin's own address. Toggling it off again clears the field so
+  // the admin doesn't accidentally send to themselves on the next create.
+  useEffect(() => {
+    if (skipAcceptance) setRecipient(adminAddr);
+    else if (recipient.toLowerCase() === adminAddr.toLowerCase()) setRecipient('');
+  }, [skipAcceptance, adminAddr]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Separate write hook for the chained acceptDemo so its pending/confirming
+  // flags don't collide with the writeApprove hook's. Reuses the existing
+  // writeApprove for step 3 — that lane was already wired and refetches the
+  // demo struct on success.
+  const { writeContract: writeAcceptChain, data: acceptChainHash, isPending: acceptChainPending, error: acceptChainError, reset: resetAcceptChain } = useWriteContract();
+  const { isLoading: acceptChainConfirming, isSuccess: acceptChainSuccess } = useWaitForTransactionReceipt({ hash: acceptChainHash });
+
+  const { signTypedDataAsync, isPending: signPending } = useSignTypedData();
+
+  // Step 1 → Step 2 transition. After createDemo's receipt confirms AND the
+  // demo struct refetches with status=0 + populated termsHash, sign the
+  // EIP-712 acceptance message and submit acceptDemo. signTypedDataAsync
+  // throws on user rejection; that lands in the error branch.
+  const advanceToStep2 = useCallback(async () => {
+    if (!demoAddr || !realDemo) return;
+    try {
+      const sig = await signTypedDataAsync({
+        domain: { name: 'MoneyCrowDemo', version: '1', chainId: chain.id, verifyingContract: demoAddr },
+        types:       DEMO_TYPES,
+        primaryType: 'DemoAcceptance',
+        message: {
+          depositor: adminAddr,
+          recipient: adminAddr, // toggle is on → admin is recipient too
+          amount:    demo.amount,
+          token:     demo.token,
+          termsHash: demo.termsHash,
+        },
+      });
+      resetAcceptChain();
+      writeAcceptChain({
+        address:      demoAddr,
+        abi:          DEMO_ABI,
+        functionName: 'acceptDemo',
+        args:         [adminAddr, sig],
+      });
+    } catch (err) {
+      setChainStep('error');
+      setChainError({ step: 2, msg: err instanceof Error ? err.message : String(err) });
+    }
+  }, [demoAddr, realDemo, chain.id, adminAddr, demo, signTypedDataAsync, resetAcceptChain, writeAcceptChain]);
+
+  // Chain driver. Each step's success → trigger the next.
+  useEffect(() => {
+    if (!skipAcceptance) return;
+
+    // Surface revert / rejection errors as a terminal state.
+    if (chainStep === 'step1' && createError) {
+      setChainStep('error');
+      setChainError({ step: 1, msg: createError.message });
+      return;
+    }
+    if (chainStep === 'step2' && acceptChainError) {
+      setChainStep('error');
+      setChainError({ step: 2, msg: acceptChainError.message });
+      return;
+    }
+    if (chainStep === 'step3' && approveError) {
+      setChainStep('error');
+      setChainError({ step: 3, msg: approveError.message });
+      return;
+    }
+
+    // Forward transitions.
+    if (chainStep === 'step1' && createSuccess && realDemo && demoStatus === 0) {
+      setChainStep('step2');
+      void advanceToStep2();
+    } else if (chainStep === 'step2' && acceptChainSuccess) {
+      setChainStep('step3');
+      resetApprove();
+      writeApprove({ address: demoAddr!, abi: DEMO_ABI, functionName: 'approveDemo', args: [adminAddr] });
+    } else if (chainStep === 'step3' && approveSuccess) {
+      setChainStep('done');
+    }
+  }, [
+    skipAcceptance, chainStep,
+    createSuccess, createError,
+    acceptChainSuccess, acceptChainError,
+    approveSuccess, approveError,
+    realDemo, demoStatus,
+    advanceToStep2, resetApprove, writeApprove, demoAddr, adminAddr,
+  ]);
+
+  // True while ANY step in the chain is in flight — used to lock the toggle
+  // and the recipient field so the user can't yank state out from under
+  // the running chain. 'done' and 'error' are both terminal → unlocked.
+  const chainInFlight = chainStep !== 'idle' && chainStep !== 'done' && chainStep !== 'error';
 
   // ── Status card open/collapsed state ──────────────────────────────────────
   // Default: open for Pending/Accepted (action might be needed), collapsed
@@ -502,7 +657,16 @@ export function DemoModePanel({ address: adminAddr, chain }: Props) {
         </p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16 }}>
-          <SharpInput label="Recipient Address" id="demoRecipient" placeholder="0x..." value={recipient} onChange={e => setRecipient(e.target.value)} />
+          <SharpInput
+            label="Recipient Address"
+            id="demoRecipient"
+            placeholder="0x..."
+            value={recipient}
+            onChange={e => setRecipient(e.target.value)}
+            disabled={skipAcceptance}
+            title={skipAcceptance ? 'Toggle off "Skip recipient acceptance" to send to another recipient' : undefined}
+            hint={skipAcceptance ? 'Locked — chain mode sends to your own wallet for end-to-end testing' : undefined}
+          />
 
           {/* Token picker */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -537,6 +701,40 @@ export function DemoModePanel({ address: adminAddr, chain }: Props) {
             <SharpInput label="Depositor Telegram" id="demoDTg" placeholder="@username" value={depositorTelegram} onChange={e => setDepositorTelegram(e.target.value)} />
           </div>
         </div>
+
+        {/* ── Skip-recipient-acceptance toggle ─────────────────────────────
+            Admin-only QoL: locks the recipient field to the admin's own
+            address and, on submit, auto-chains createDemo → acceptDemo →
+            approveDemo across three sequential wallet popups (plus one
+            off-chain typed-data signature inside step 2). Lets the admin
+            walk the full end-to-end flow against the live contract
+            without needing a second wallet to play recipient. */}
+        <label
+          style={{
+            display: 'flex', alignItems: 'flex-start', gap: 10,
+            padding: '10px 12px', marginBottom: 14,
+            border: `1px solid ${border}`,
+            cursor: chainInFlight ? 'not-allowed' : 'pointer',
+            opacity: chainInFlight ? 0.6 : 1,
+            background: skipAcceptance ? (isDark ? 'rgba(242,183,5,0.06)' : 'rgba(242,183,5,0.10)') : 'transparent',
+            transition: 'background 0.12s',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={skipAcceptance}
+            disabled={chainInFlight}
+            onChange={e => setSkipAcceptance(e.target.checked)}
+            style={{ marginTop: 2, cursor: chainInFlight ? 'not-allowed' : 'pointer' }}
+          />
+          <div style={{ fontSize: 13, lineHeight: 1.5, color: textPrimary, fontFamily: "'Space Grotesk', sans-serif" }}>
+            Skip recipient acceptance
+            <div style={{ fontSize: 11, color: textSecondary, marginTop: 3 }}>
+              Locks recipient to your own wallet and auto-chains createDemo → acceptDemo → approveDemo for end-to-end testing.
+              You'll see three sequential wallet popups plus one off-chain signature.
+            </div>
+          </div>
+        </label>
 
         {createSuccess ? (
           <div className="alert alert-success">
@@ -588,6 +786,73 @@ export function DemoModePanel({ address: adminAddr, chain }: Props) {
             )}
           </>
         )}
+
+        {/* ── Auto-chain progress strip ─────────────────────────────────────
+            Renders when skipAcceptance is on AND the chain has been kicked
+            off. Three pills, one per top-level step:
+              1/3 createDemo
+              2/3 acceptDemo (typed-data sign + tx)
+              3/3 approveDemo
+            Current step highlighted in yellow; completed steps show ✓;
+            error step shows ✗ + the revert/rejection message below. */}
+        {skipAcceptance && chainStep !== 'idle' && (() => {
+          // Derive per-step status. A step is 'done' once its terminal
+          // success flag fires; the active step shows a sub-state pulled
+          // from the wagmi pending/confirming hooks so the user can see
+          // signature-vs-mining distinctions inline.
+          const stepLabel = (n: 1|2|3): string => {
+            if (chainStep === 'done')  return '✓';
+            if (chainStep === 'error' && chainError?.step === n) return '✗';
+            if (chainStep === 'error' && (chainError?.step ?? 0) > n) return '✓';
+            if (chainStep === `step${n}` as ChainStep) {
+              if (n === 1) return createPending ? 'sign…' : createConfirming ? 'mining…' : '…';
+              if (n === 2) return signPending ? 'sign typed data…' : acceptChainPending ? 'sign tx…' : acceptChainConfirming ? 'mining…' : '…';
+              return approvePending ? 'sign…' : approveConfirming ? 'mining…' : '…';
+            }
+            const stepOrder: Record<ChainStep, number> = { idle:0, step1:1, step2:2, step3:3, done:4, error:0 };
+            return stepOrder[chainStep] > n ? '✓' : '';
+          };
+          const isActive = (n: 1|2|3) => chainStep === (`step${n}` as ChainStep);
+          const pillStyle = (n: 1|2|3): React.CSSProperties => ({
+            padding: '6px 10px',
+            fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+            background: isActive(n)
+              ? '#F2B705'
+              : chainStep === 'error' && chainError?.step === n
+                ? 'rgba(248,113,113,0.10)'
+                : 'transparent',
+            color: isActive(n)
+              ? '#000'
+              : chainStep === 'error' && chainError?.step === n
+                ? '#F87171'
+                : textSecondary,
+            border: `1px solid ${
+              isActive(n)
+                ? '#F2B705'
+                : chainStep === 'error' && chainError?.step === n
+                  ? 'rgba(248,113,113,0.30)'
+                  : border
+            }`,
+            fontFamily: "'Space Grotesk', sans-serif",
+          });
+          return (
+            <div style={{ marginTop: 14, padding: '12px 14px', border: `1px solid ${border}`, background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11, color: textTertiary, fontFamily: "'Space Grotesk', sans-serif" }}>
+                <span style={pillStyle(1)}>1/3 createDemo <span style={{ marginLeft: 4, fontWeight: 600 }}>{stepLabel(1)}</span></span>
+                <span>→</span>
+                <span style={pillStyle(2)}>2/3 acceptDemo <span style={{ marginLeft: 4, fontWeight: 600 }}>{stepLabel(2)}</span></span>
+                <span>→</span>
+                <span style={pillStyle(3)}>3/3 approveDemo <span style={{ marginLeft: 4, fontWeight: 600 }}>{stepLabel(3)}</span></span>
+                {chainStep === 'done' && <span style={{ marginLeft: 'auto', color: '#34D399', fontWeight: 700 }}>chain complete</span>}
+              </div>
+              {chainStep === 'error' && chainError && (
+                <div className="alert alert-error" style={{ marginTop: 10, fontSize: 12 }}>
+                  Step {chainError.step} failed: {chainError.msg}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {verifyToken && (
           <button
