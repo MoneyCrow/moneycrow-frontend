@@ -60,7 +60,13 @@ function cacheKey(role: DemoScanRole, addr: string): string {
   return `demoScan:${role}:${addr.toLowerCase()}`;
 }
 
-interface Cached { scannedAt: number; entries: DemoEntry[] }
+/** Cached scan result. chainErrors added (vs the original single-field
+ *  Cached interface) so an Unavailable state persists across page
+ *  navigation — without it, a chain that failed on cold scan would
+ *  render as "no demos" instead of "Unavailable" once the user
+ *  navigated away and back. Optional in the type for backwards
+ *  compatibility with caches written before this field existed. */
+interface Cached { scannedAt: number; entries: DemoEntry[]; chainErrors?: string[] }
 
 function loadCache(role: DemoScanRole, addr: string): Cached | null {
   try {
@@ -70,11 +76,12 @@ function loadCache(role: DemoScanRole, addr: string): Cached | null {
   } catch { return null; }
 }
 
-function saveCache(role: DemoScanRole, addr: string, entries: DemoEntry[]): void {
+function saveCache(role: DemoScanRole, addr: string, entries: DemoEntry[], chainErrors: string[]): void {
   try {
     localStorage.setItem(cacheKey(role, addr), JSON.stringify({
       scannedAt: Date.now(),
       entries,
+      chainErrors,
     } satisfies Cached));
   } catch { /* quota or disabled — best-effort */ }
 }
@@ -127,11 +134,16 @@ export function MyDemosPanel({ isAdmin }: Props) {
   const textTertiary  = isDark ? 'rgba(255,255,255,0.30)' : 'rgba(17,17,17,0.35)';
   const textPrimary   = isDark ? '#FFFFFF' : '#111111';
 
+  /** Per-tab in-memory state. `null` = haven't loaded yet (skeleton).
+   *  Anything else = has data, even if `entries` is empty (the
+   *  Sent-by-me case for a recipient-only wallet). chainErrors lets
+   *  the UI distinguish "no demos because the wallet has none" from
+   *  "no demos because every chain's scan failed". */
+  interface TabResult { entries: DemoEntry[]; chainErrors: string[] }
+
   const [tab, setTab] = useState<Tab>('received');
-  // One entry list per role, kept independently so flipping tabs is
-  // instant after each one has been warmed.
-  const [received, setReceived] = useState<DemoEntry[] | null>(null);
-  const [sent,     setSent]     = useState<DemoEntry[] | null>(null);
+  const [received, setReceived] = useState<TabResult | null>(null);
+  const [sent,     setSent]     = useState<TabResult | null>(null);
   const [scanning, setScanning] = useState<{ received: boolean; sent: boolean }>({ received: false, sent: false });
 
   // Drive the scan for the active tab, with cache-then-refresh. Both
@@ -140,10 +152,10 @@ export function MyDemosPanel({ isAdmin }: Props) {
   useEffect(() => {
     if (!address) return;
     const role: DemoScanRole = tab === 'received' ? 'recipient' : 'depositor';
-    const setEntries = tab === 'received' ? setReceived : setSent;
+    const setResult = tab === 'received' ? setReceived : setSent;
 
     const cached = loadCache(role, address);
-    if (cached) setEntries(cached.entries);
+    if (cached) setResult({ entries: cached.entries, chainErrors: cached.chainErrors ?? [] });
 
     const stale = !cached || (Date.now() - cached.scannedAt) > CACHE_TTL_MS;
     if (!stale) return;
@@ -151,7 +163,7 @@ export function MyDemosPanel({ isAdmin }: Props) {
     setScanning(prev => ({ ...prev, [tab]: true }));
     let cancelled = false;
     (async () => {
-      const entries = await scanAllDemos(role, address, {
+      const { entries, chainErrors } = await scanAllDemos(role, address, {
         // No scanWindowBlocks — MyDemos shows full history, which is the
         // point of having a dedicated tab. The chunked Alchemy scan
         // takes ~4 min worst-case on a cold cache; the loading state
@@ -162,8 +174,8 @@ export function MyDemosPanel({ isAdmin }: Props) {
       if (cancelled) return;
       // Sort newest-first.
       const sorted = [...entries].sort((a, b) => b.createdAt - a.createdAt);
-      setEntries(sorted);
-      saveCache(role, address, sorted);
+      setResult({ entries: sorted, chainErrors });
+      saveCache(role, address, sorted, chainErrors);
       setScanning(prev => ({ ...prev, [tab]: false }));
     })();
     return () => { cancelled = true; };
@@ -180,7 +192,9 @@ export function MyDemosPanel({ isAdmin }: Props) {
     );
   }
 
-  const activeEntries = tab === 'received' ? received : sent;
+  const activeResult  = tab === 'received' ? received : sent;
+  const activeEntries = activeResult?.entries ?? null;
+  const activeErrors  = activeResult?.chainErrors ?? [];
   const isLoading     = tab === 'received' ? scanning.received : scanning.sent;
 
   return (
@@ -215,7 +229,7 @@ export function MyDemosPanel({ isAdmin }: Props) {
       </div>
 
       <SharpCard>
-        <div style={{ padding: '14px 20px', borderBottom: `1px solid ${border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ padding: '14px 20px', borderBottom: `1px solid ${border}`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, fontWeight: 700, color: '#F2B705', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
             {tab === 'received' ? 'Sent to me' : 'Sent by me'}
           </span>
@@ -231,6 +245,35 @@ export function MyDemosPanel({ isAdmin }: Props) {
             </span>
           )}
         </div>
+
+        {/* Unavailable pills — mirror of WalletSnapshot's chain-error
+            row. Shows up when an entire chain's scan failed (every
+            chunk rejected, typically Alchemy free-tier 10-block-range
+            cap or a 429 storm). Distinguishes a real "0 demos" from
+            a "we couldn't tell". */}
+        {activeErrors.length > 0 && (
+          <div style={{ padding: '10px 20px', borderBottom: `1px solid ${border}`, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, color: textTertiary, fontStyle: 'italic', marginRight: 4 }}>
+              Unavailable:
+            </span>
+            {activeErrors.map(c => (
+              <span
+                key={c}
+                title="RPC call failed — check the browser console for details. Likely Alchemy free-tier 10-block-range cap; set VITE_*_RPC_URL or upgrade plan."
+                style={{
+                  background: 'rgba(248,113,113,0.10)',
+                  color: '#F87171',
+                  border: '1px solid rgba(248,113,113,0.30)',
+                  fontSize: 10, fontWeight: 700,
+                  letterSpacing: '0.08em', textTransform: 'uppercase',
+                  padding: '2px 7px',
+                }}
+              >
+                {c === 'base' ? 'Base' : 'Polygon'}
+              </span>
+            ))}
+          </div>
+        )}
 
         <DemoRows
           tab={tab}

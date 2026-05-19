@@ -103,27 +103,60 @@ export interface DemoScanOptions {
 // ── Scan ────────────────────────────────────────────────────────────────────
 
 /**
+ * Per-chain result of a demo scan. `failed` is true when every chunk
+ * of the getLogs sweep was rejected by the RPC — typically Alchemy's
+ * free-tier 10-block-range limit on a chunk size larger than that, or
+ * a 429 burst. Lets the UI flag the chain as Unavailable rather than
+ * silently showing "0 demos" (which is indistinguishable from genuine
+ * absence of activity).
+ */
+export interface DemoScanChainResult {
+  entries: DemoEntry[];
+  failed:  boolean;
+}
+
+/** Multi-chain result. `chainErrors` mirrors WalletSnapshot's
+ *  SnapshotResult shape — list of chain keys whose scan failed
+ *  completely. Empty entries[] + non-empty chainErrors means the
+ *  scan couldn't run; non-empty entries[] + non-empty chainErrors
+ *  means partial-success (some chains worked, others failed). */
+export interface DemoScanAllResult {
+  entries:     DemoEntry[];
+  chainErrors: Array<DemoScanChain['key']>;
+}
+
+/**
  * Scan one chain for DemoCreated events where `addr` plays `role`, then
  * read each unique counterparty's current demo struct and return only
  * the entries that match `statusFilter` (or all of them, when omitted).
  *
- * Per-chunk getLogs failures are swallowed individually so a single
- * 429 / 503 / transient timeout doesn't blank an otherwise-good scan.
- * Per-counterparty read failures are similarly tolerated. The caller
- * may wrap the whole thing in a try/catch but partial results are
- * always preferred to no results.
+ * Per-chunk getLogs failures are reported via console.warn (not
+ * swallowed silently — that's what made the free-tier 10-block-range
+ * issue invisible). If EVERY chunk fails, the result's `failed` flag
+ * goes true so the UI can surface an Unavailable pill instead of an
+ * ambiguous empty list. Per-counterparty read failures stay tolerated
+ * inside the read loop — one stale token's metadata shouldn't take
+ * down the whole chain.
  */
 export async function scanChainDemos(
   cfg:  DemoScanChain,
   role: DemoScanRole,
   addr: `0x${string}`,
   opts: DemoScanOptions = {},
-): Promise<DemoEntry[]> {
+): Promise<DemoScanChainResult> {
   const demoAddr = getDemoAddress(cfg.chainId);
-  if (!demoAddr) return [];
+  if (!demoAddr) return { entries: [], failed: false };
 
   const deployBlock = DEPLOY_BLOCK[cfg.chainId] ?? 0n;
-  const toBlock     = await cfg.client.getBlockNumber();
+  let toBlock: bigint;
+  try {
+    toBlock = await cfg.client.getBlockNumber();
+  } catch (err) {
+    // Even the head-block lookup failed — RPC is unreachable. Surface
+    // and mark the chain failed; no point trying chunks.
+    console.warn(`[demoScan] [${cfg.displayName}] getBlockNumber failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { entries: [], failed: true };
+  }
   const windowStart = opts.scanWindowBlocks !== undefined && toBlock > opts.scanWindowBlocks
     ? toBlock - opts.scanWindowBlocks
     : 0n;
@@ -131,7 +164,10 @@ export async function scanChainDemos(
 
   type Log = { args?: { depositor?: `0x${string}`; recipient?: `0x${string}` } };
   const allLogs: Log[] = [];
-  let chunkFrom = fromBlock;
+  let chunkFrom    = fromBlock;
+  let chunksOk     = 0;
+  let chunksFailed = 0;
+  let firstError: string | null = null;  // log only the first per chain to avoid console spam
   while (chunkFrom <= toBlock) {
     const chunkTo = chunkFrom + CHUNK_SIZE - 1n < toBlock ? chunkFrom + CHUNK_SIZE - 1n : toBlock;
     try {
@@ -149,9 +185,28 @@ export async function scanChainDemos(
         toBlock:   chunkTo,
       });
       allLogs.push(...(chunk as unknown as Log[]));
-    } catch { /* skip this chunk */ }
+      chunksOk++;
+    } catch (err) {
+      chunksFailed++;
+      const msg = err instanceof Error ? err.message : String(err);
+      // Surface the first failure inline so a free-tier / rate-limit
+      // root cause appears in DevTools immediately. Subsequent identical
+      // failures stay quiet — a 100-chunk Alchemy 403 storm would
+      // otherwise drown the console.
+      if (firstError === null) {
+        firstError = msg;
+        console.warn(`[demoScan] [${cfg.displayName}] eth_getLogs chunk ${chunkFrom}-${chunkTo} failed: ${msg.slice(0, 240)}`);
+      }
+    }
     chunkFrom = chunkTo + 1n;
   }
+  if (chunksFailed > 1) {
+    console.warn(`[demoScan] [${cfg.displayName}] ${chunksFailed} chunks failed total (${chunksOk} succeeded). First error above.`);
+  }
+  // Chain is "failed" only when nothing succeeded AND at least one
+  // chunk error happened. Empty window with no failures = real "no
+  // logs in this range", not an Unavailable state.
+  const failed = chunksOk === 0 && chunksFailed > 0;
 
   // Dedupe by the counterparty whose address keys the contract's
   // storage — depositor. A given depositor only ever has ONE active
@@ -204,20 +259,34 @@ export async function scanChainDemos(
       createdAt: Number(r.createdAt),
     });
   });
-  return out;
+  return { entries: out, failed };
 }
 
-/** Convenience: scan all configured chains in parallel. Each chain's
- *  failure is isolated; the result is the union of successful chains. */
+/** Scan all configured chains in parallel. Per-chain failures are
+ *  isolated and reported back via `chainErrors`; the entries field
+ *  contains everything that came back successfully (which may be empty
+ *  if every chain failed). Mirrors WalletSnapshot's SnapshotResult
+ *  shape so the consumer UI can render an Unavailable pill the same
+ *  way it does for wallet-balance lookups. */
 export async function scanAllDemos(
   role: DemoScanRole,
   addr: `0x${string}`,
   opts: DemoScanOptions = {},
-): Promise<DemoEntry[]> {
+): Promise<DemoScanAllResult> {
   const results = await Promise.all(
     DEMO_SCAN_CHAINS.map(cfg =>
-      scanChainDemos(cfg, role, addr, opts).catch(() => [] as DemoEntry[]),
+      scanChainDemos(cfg, role, addr, opts).catch(err => {
+        // scanChainDemos already catches its own internal errors. If we
+        // land here it's a programming error (unhandled throw from a
+        // hook reorganisation, etc.) — surface it, mark failed so the
+        // chain shows Unavailable, return empty entries.
+        console.warn(`[demoScan] [${cfg.displayName}] unexpected throw: ${err instanceof Error ? err.message : String(err)}`);
+        return { entries: [], failed: true } satisfies DemoScanChainResult;
+      }),
     ),
   );
-  return results.flat();
+  return {
+    entries:     results.flatMap(r => r.entries),
+    chainErrors: DEMO_SCAN_CHAINS.flatMap((cfg, i) => results[i].failed ? [cfg.key] : []),
+  };
 }

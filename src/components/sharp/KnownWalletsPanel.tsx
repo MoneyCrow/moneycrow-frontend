@@ -130,19 +130,40 @@ async function scanChain(
   type AnyLog = { args?: { depositor?: `0x${string}`; recipient?: `0x${string}` } };
   const allLogs: AnyLog[] = [];
   let chunkFrom = fromBlock;
+  // First chunk failure of each kind logged inline; subsequent identical
+  // failures suppressed to avoid a 100-chunk Alchemy 403 storm drowning
+  // the console. Without this, free-tier-cap silent failures looked like
+  // "scanner finds no escrows" (the exact symptom that misled commit
+  // ec1ea38's investigation of the My Demos tab).
+  let depErrLogged = false;
+  let demoErrLogged = false;
 
   while (chunkFrom <= toBlock) {
     const chunkTo = chunkFrom + CHUNK_SIZE - 1n < toBlock ? chunkFrom + CHUNK_SIZE - 1n : toBlock;
 
     const dep = await client
       .getLogs({ address: contractAddr, event: DEPOSITED_EVENT, fromBlock: chunkFrom, toBlock: chunkTo })
-      .catch(() => [] as unknown[]);
+      .catch(err => {
+        if (!depErrLogged) {
+          depErrLogged = true;
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`[KnownWallets] [${chainKey}] Deposited chunk ${chunkFrom}-${chunkTo} failed: ${msg.slice(0, 240)}`);
+        }
+        return [] as unknown[];
+      });
     allLogs.push(...(dep as AnyLog[]));
 
     if (demoAddr) {
       const demo = await client
         .getLogs({ address: demoAddr, event: DEMO_CREATED_EVENT, fromBlock: chunkFrom, toBlock: chunkTo })
-        .catch(() => [] as unknown[]);
+        .catch(err => {
+          if (!demoErrLogged) {
+            demoErrLogged = true;
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[KnownWallets] [${chainKey}] DemoCreated chunk ${chunkFrom}-${chunkTo} failed: ${msg.slice(0, 240)}`);
+          }
+          return [] as unknown[];
+        });
       allLogs.push(...(demo as AnyLog[]));
     }
 

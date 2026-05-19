@@ -207,11 +207,20 @@ export function RecipientDemoBanner() {
       // Self-sent demos (depositor === recipient === address) are also
       // hidden — they'd surface when the admin runs the skip-acceptance
       // chain on their own wallet, which is noise.
-      const all = await scanAllDemos('recipient', address, {
+      const { entries: all, chainErrors } = await scanAllDemos('recipient', address, {
         scanWindowBlocks: SCAN_WINDOW_BLOCKS,
         statusFilter:     PENDING_ONLY,
       });
       if (cancelled) return;
+      // Banner is a passive nudge — it doesn't render an Unavailable pill
+      // for failed chains because there's nothing actionable from a
+      // first-visit recipient's POV when a scan errors. But a chainErrors
+      // result IS worth surfacing in the console so the next time
+      // something fails silently the user has a breadcrumb instead of
+      // staring at "0 demos" with no diagnostic.
+      if (chainErrors.length > 0) {
+        console.warn(`[RecipientDemoBanner] chain(s) Unavailable: ${chainErrors.join(', ')} — banner may be incomplete. Set VITE_BASE_RPC_URL / VITE_POLYGON_RPC_URL or upgrade Alchemy plan.`);
+      }
       const entries = all.filter(d => d.depositor.toLowerCase() !== address.toLowerCase());
       setDemos(entries);
       saveCache(address, entries);
