@@ -173,6 +173,13 @@ export function DemoModePanel({ address: adminAddr, chain }: Props) {
     && demo.recipient.toLowerCase() !== ETH_ZERO;
   const demoStatus = realDemo ? demo.status : -1;
 
+  // A non-terminal existing demo (Pending or Accepted) makes the contract
+  // revert on createDemo — only Approved (status 2) frees the slot. The
+  // form-level canCreate doesn't know about this; the user would see the
+  // wallet popup, sign, then get an opaque revert. Surfacing it inline
+  // both disables the button AND tells them which demo is blocking.
+  const blockingDemo = realDemo && demoStatus !== 2;
+
   // ── Write hooks ───────────────────────────────────────────────────────────
   const { writeContract: writeCreate, data: createHash, isPending: createPending, error: createError, reset: resetCreate } = useWriteContract();
   const { isLoading: createConfirming, isSuccess: createSuccess } = useWaitForTransactionReceipt({ hash: createHash });
@@ -541,13 +548,45 @@ export function DemoModePanel({ address: adminAddr, chain }: Props) {
             )}
           </div>
         ) : (
-          <SharpButton
-            style={{ background: '#F2B705', color: '#000', border: 'none' }}
-            onClick={handleCreate}
-            disabled={!canCreate || createPending || createConfirming}
-          >
-            {createPending ? 'Awaiting signature...' : createConfirming ? 'Mining...' : 'Create Demo'}
-          </SharpButton>
+          <>
+            <SharpButton
+              style={{ background: '#F2B705', color: '#000', border: 'none' }}
+              onClick={handleCreate}
+              disabled={!canCreate || createPending || createConfirming || blockingDemo}
+            >
+              {createPending ? 'Awaiting signature...' : createConfirming ? 'Mining...' : 'Create Demo'}
+            </SharpButton>
+            {/* Disabled-reason caption. Only when the button is disabled
+                *because of an existing on-chain demo* — form-validation
+                issues (empty amount, malformed recipient, etc.) don't
+                need a caption; the field itself signals what's missing.
+                This caption answers the "why is this greyed out?" case
+                that's invisible without an explanation: the contract
+                will revert because the depositor slot is occupied. */}
+            {blockingDemo && (
+              <p style={{ fontSize: 12, color: textSecondary, lineHeight: 1.55, marginTop: 10, maxWidth: 540 }}>
+                {(() => {
+                  const created = new Date(Number(demo.createdAt) * 1000);
+                  const dateStr = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(created);
+                  // Symmetry hook: if the connected wallet is the recipient,
+                  // the demo is for them to ACT on, not waiting on them.
+                  // Unreachable from inside the admin panel today (getDemoEscrow
+                  // is keyed on adminAddr, so admin always == depositor here),
+                  // but encoded so when DemoModePanel is reused on a recipient-
+                  // facing route this branch surfaces the correct copy.
+                  if (demo.recipient.toLowerCase() === adminAddr.toLowerCase()) {
+                    return (
+                      <>You have a demo from <code style={{ fontFamily: 'monospace', fontSize: 11 }}>{truncAddr(demo.depositor)}</code> from {dateStr} waiting for you to accept above.</>
+                    );
+                  }
+                  const statusWord = demoStatus === 0 ? 'pending' : demoStatus === 1 ? 'accepted (awaiting your approval)' : '';
+                  return (
+                    <>You have a {statusWord} demo from {dateStr} with recipient <code style={{ fontFamily: 'monospace', fontSize: 11 }}>{truncAddr(demo.recipient)}</code>. Resolve it above before creating a new one.</>
+                  );
+                })()}
+              </p>
+            )}
+          </>
         )}
 
         {verifyToken && (
