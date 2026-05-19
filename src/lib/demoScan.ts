@@ -41,10 +41,39 @@ function alchemySubdomain(chainKey: 'base' | 'polygon'): string {
   return chainKey === 'base' ? 'base-mainnet' : 'polygon-mainnet';
 }
 
+/**
+ * Pick the RPC URL the chunked log-scanner should use, in this priority:
+ *
+ *   1. VITE_BASE_RPC_URL / VITE_POLYGON_RPC_URL — explicit override.
+ *      Wins over Alchemy because eth_getLogs is a standard JSON-RPC
+ *      method that any provider handles, and Alchemy's free tier caps
+ *      it at a 10-block range per request. The codebase chunks at
+ *      10_000 blocks, so on free-tier Alchemy every chunk gets a -32600
+ *      and the scan silently returns 0 logs. Letting an operator drop
+ *      in a publicnode / Ankr / paid-Alchemy URL via env var is the
+ *      escape hatch from that cap.
+ *
+ *   2. VITE_ALCHEMY_API_KEY → Alchemy enhanced API URL. Still the
+ *      default when no per-chain override is set, because most
+ *      deployments already have it for the WalletSnapshot enhanced-API
+ *      path and reusing one key keeps the env surface small.
+ *
+ *   3. Undefined → viem's chain-default RPC (rate-limited public node).
+ *      Last-resort fallback so a misconfigured environment doesn't
+ *      throw on the createPublicClient call.
+ *
+ * WalletSnapshot's curated-token viem path uses its OWN envRpcUrl
+ * helper (intentionally different — it shouldn't override the enhanced
+ * API path, since publicnode doesn't have an equivalent for
+ * alchemy_getTokenBalances). Don't unify these without thinking it
+ * through.
+ */
 function rpcUrlFor(chainKey: 'base' | 'polygon'): string | undefined {
-  if (ALCHEMY_KEY) return `https://${alchemySubdomain(chainKey)}.g.alchemy.com/v2/${ALCHEMY_KEY}`;
   const env = import.meta.env as Record<string, string | undefined>;
-  return chainKey === 'base' ? env.VITE_BASE_RPC_URL : env.VITE_POLYGON_RPC_URL;
+  const override = chainKey === 'base' ? env.VITE_BASE_RPC_URL : env.VITE_POLYGON_RPC_URL;
+  if (override) return override;
+  if (ALCHEMY_KEY) return `https://${alchemySubdomain(chainKey)}.g.alchemy.com/v2/${ALCHEMY_KEY}`;
+  return undefined;
 }
 
 function makeClient(chainKey: 'base' | 'polygon'): PublicClient {

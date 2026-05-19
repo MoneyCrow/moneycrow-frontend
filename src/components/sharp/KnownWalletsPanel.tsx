@@ -38,26 +38,40 @@ const DEPLOY_BLOCK: Record<number, bigint> = {
 
 const CHUNK_SIZE = 10_000n;
 
-// Reuse VITE_ALCHEMY_API_KEY — the same env var WalletSnapshot.tsx reads.
-// One source of truth: if you swap Alchemy keys you only touch one Vercel
-// env var, and the event scanner and snapshot panel can never drift apart.
+// RPC URL selection for the chunked event scan. Priority:
 //
-// The per-chain Alchemy subdomain follows the exact pattern WalletSnapshot
-// uses (`base-mainnet`, `polygon-mainnet`). Falling through to the per-
-// chain VITE_*_RPC_URL override keeps the older RPC-URL env vars working
-// for any deploy that doesn't have the Alchemy key set yet; if neither is
-// configured the call lands on viem's chain default (rate-limited public
-// RPC) and the user sees the old slow behaviour — which is what they had
-// before this change, so it's a safe fallback.
+//   1. VITE_BASE_RPC_URL / VITE_POLYGON_RPC_URL — explicit override
+//      via Vercel env. Wins over Alchemy because eth_getLogs is a
+//      standard JSON-RPC method that any provider handles, and
+//      Alchemy's free tier caps it at a 10-block range per request.
+//      The 10_000-block CHUNK_SIZE below would hit that cap on every
+//      chunk and silently return zero logs. The override lets an
+//      operator drop in publicnode / Ankr / paid-Alchemy and bypass
+//      the cap without code changes.
+//
+//   2. VITE_ALCHEMY_API_KEY → Alchemy URL. Default when no override
+//      is set, matching what WalletSnapshot.tsx already does for its
+//      enhanced API. One env var, two consumers.
+//
+//   3. Undefined → viem's chain default (rate-limited public RPC).
+//      Last-resort fallback.
+//
+// This is the same priority order as src/lib/demoScan.ts's rpcUrlFor.
+// WalletSnapshot's curated-token viem path keeps its OWN envRpcUrl
+// helper because that path is the FALLBACK from Alchemy's enhanced
+// API — flipping its priority would degrade the "show all ERC-20s"
+// feature for everyone with both env vars set.
 const ALCHEMY_KEY = (import.meta.env.VITE_ALCHEMY_API_KEY as string | undefined) ?? '';
 
 function rpcUrlFor(chainKey: 'base' | 'polygon'): string | undefined {
+  const env = import.meta.env as Record<string, string | undefined>;
+  const override = chainKey === 'base' ? env.VITE_BASE_RPC_URL : env.VITE_POLYGON_RPC_URL;
+  if (override) return override;
   if (ALCHEMY_KEY) {
     const subdomain = chainKey === 'base' ? 'base-mainnet' : 'polygon-mainnet';
     return `https://${subdomain}.g.alchemy.com/v2/${ALCHEMY_KEY}`;
   }
-  const env = import.meta.env as Record<string, string | undefined>;
-  return chainKey === 'base' ? env.VITE_BASE_RPC_URL : env.VITE_POLYGON_RPC_URL;
+  return undefined;
 }
 
 const baseClient    = createPublicClient({ chain: base,    transport: http(rpcUrlFor('base'))    }) as PublicClient;
